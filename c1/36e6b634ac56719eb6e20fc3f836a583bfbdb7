@@ -1,0 +1,42 @@
+tests/playwright/conftest.py
+  s_961c68c3c80ee6::t_22f4ba3be5d4eb 1-8
+tests/playwright/test_inbox_scraping.py
+  s_961c68c3c80ee6::t_92e8b77087e315 9
+  s_961c68c3c80ee6::t_48c51437fdadc4 1-8,10-43
+tests/playwright/helpers.py
+  s_961c68c3c80ee6::t_69472012194f4a 1-25
+tests/playwright/fixtures/invitation_manager.html
+  s_961c68c3c80ee6::t_d0491838bbe653 1-28
+tests/playwright/fixtures/inbox_thread_list.html
+  s_961c68c3c80ee6::t_5831b9b1cb97d2 1-34
+.gitignore
+  s_961c68c3c80ee6::t_21f1ffd6080049 152-155
+pyproject.toml
+  s_961c68c3c80ee6::t_b6e8c9e621ff26 6-9
+tests/playwright/test_invitation_scraping.py
+  s_961c68c3c80ee6::t_92e8b77087e315 10
+  s_961c68c3c80ee6::t_ac256dff5fba58 1-9,11-45
+requirements-dev.txt
+  s_961c68c3c80ee6::t_0420f14a678883 1-3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c136e6b634ac56719eb6e20fc3f836a583bfbdb7",
+  "prompts": {},
+  "humans": {
+    "h_366b2866816577": {
+      "author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_961c68c3c80ee6": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "76ff59bf-318a-49cd-a9a3-6cbcefba1eb4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  }
+}
