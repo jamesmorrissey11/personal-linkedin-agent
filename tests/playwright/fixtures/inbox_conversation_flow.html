@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<!--
+Static fixture: a conversation list where clicking a li.msg-conversation-listitem
+reveals a message thread (simulating inbox_manager.get_inbox_messages()'s
+`await conversation.click()` step), and the revealed thread has more than three
+li.msg-s-message-list__event entries so tests can assert the same "last three
+messages, in order" slicing get_inbox_messages() applies
+(`message_elements[-3:]`). The click handler is test-only inline JS standing in for
+LinkedIn's real single-page-app navigation.
+-->
+<html>
+  <body>
+    <ul class="msg-conversations-container__conversations-list">
+      <li
+        class="msg-conversation-listitem"
+        onclick="document.getElementById('thread-sam').style.display = 'block'; this.setAttribute('data-clicked', 'true')"
+      >
+        <h3 class="msg-conversation-card__participant-names">Sam Colleague</h3>
+      </li>
+    </ul>
+
+    <div id="thread-sam" style="display: none">
+      <li class="msg-s-message-list__event">
+        <span class="msg-s-message-group__name">Sam Colleague</span>
+        <p class="msg-s-event-listitem__body">Message 1 - oldest</p>
+        <time class="msg-s-message-group__timestamp">Monday 9:00 AM</time>
+      </li>
+      <li class="msg-s-message-list__event">
+        <span class="msg-s-message-group__name">You</span>
+        <p class="msg-s-event-listitem__body">Message 2</p>
+        <time class="msg-s-message-group__timestamp">Monday 9:05 AM</time>
+      </li>
+      <li class="msg-s-message-list__event">
+        <span class="msg-s-message-group__name">Sam Colleague</span>
+        <p class="msg-s-event-listitem__body">Message 3</p>
+        <time class="msg-s-message-group__timestamp">Monday 9:10 AM</time>
+      </li>
+      <li class="msg-s-message-list__event">
+        <span class="msg-s-message-group__name">You</span>
+        <p class="msg-s-event-listitem__body">Message 4</p>
+        <time class="msg-s-message-group__timestamp">Monday 9:15 AM</time>
+      </li>
+      <li class="msg-s-message-list__event">
+        <span class="msg-s-message-group__name">Sam Colleague</span>
+        <p class="msg-s-event-listitem__body">Message 5 - newest</p>
+        <time class="msg-s-message-group__timestamp">Monday 9:20 AM</time>
+      </li>
+    </div>
+  </body>
+</html>
