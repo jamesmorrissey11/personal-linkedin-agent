@@ -1,0 +1,41 @@
+.github/copilot-instructions.md
+  s_94354d0b8f6f50::t_e48f5fbe80f22d 27-36
+  s_94354d0b8f6f50::t_e3c2d320192949 37,50-56
+  s_94354d0b8f6f50::t_e5017eabaa3244 38-49
+  s_fdc9d34f6890f4::t_6612b35f80fd36 1-26
+.github/instructions/infra.instructions.md
+  s_94354d0b8f6f50::t_54414701e8f64f 1-14
+.github/instructions/python.instructions.md
+  s_94354d0b8f6f50::t_a6f952a865fac3 1-39
+.github/instructions/markdown.instructions.md
+  s_94354d0b8f6f50::t_51582b3e564238 1-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9040bae2b1f9bb178638f15f967a79deca623aa7",
+  "prompts": {},
+  "humans": {
+    "h_366b2866816577": {
+      "author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_94354d0b8f6f50": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "526019cb-4d7e-4edb-b478-1412bc81e5bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    },
+    "s_fdc9d34f6890f4": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "59d72ee6-c292-4d35-805c-bee155593fea",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  }
+}
