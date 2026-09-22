@@ -38,25 +38,54 @@ All 7 todos done. Summary of what shipped, deviations from the original plan, an
    for Azure since no Azure creds exist in this sandbox): the call succeeded via the second model,
    confirming connection-refused errors already trigger fallback with the library's default `fallback_on`.
 3. **`gemma3:12b` could not be pulled in this sandbox** (8.1GB download hit `max retries exceeded: EOF`
-   after ~4 minutes — a sandbox network/bandwidth limitation, not a code issue). Validated the entire
+   after ~4 minutes — a sandbox network/bandwidth limitation, not a code issue). This was reproduced
+   twice more on later attempts (same `EOF` failure at ~4KB downloaded both times), confirming it's a
+   persistent large-download limitation of the sandbox rather than a one-off. Validated the entire
    mechanism instead against the already-installed `gemma3:latest` (4.3B) via `OLLAMA_MODEL=gemma3:latest`
    env override; the code path is identical regardless of which Gemma 3 size is pulled. **The user should
    run `ollama pull gemma3:12b` and re-run `python evals.py` on their own Apple Silicon Mac** to get
-   size-accurate eval numbers before relying on it for unattended runs.
+   size-accurate eval numbers before relying on it for unattended runs — `gemma3:12b`-specific numbers
+   remain unverified as of this plan; only `gemma3:latest` (4.3B) has been validated end-to-end.
 
 ### Validation evidence (risk #2 from the original plan — Gemma 3 structured-output reliability)
 
-Ran `python evals.py` twice against `gemma3:latest` (4.3B) via Ollama:
-- Run 1: `CorrectDecisionEvaluator` average 0.800 (16/20 cases correct); `IsInstance` assertion passed on
-  100% of cases (no malformed/unparseable structured output in either run).
+Ran `python evals.py` **four times total** against `gemma3:latest` (4.3B) via Ollama (2 runs during the
+original implementation session, 2 more re-run afterward against a freshly re-pulled `gemma3:latest` on a
+second machine/session to confirm consistency):
+- Run 1: `CorrectDecisionEvaluator` average 0.800 (16/20 cases correct); `IsInstance` 100%.
 - Run 2: `CorrectDecisionEvaluator` average 1.00 (20/20 cases correct); `IsInstance` 100%.
+- Run 3 (re-verification): `CorrectDecisionEvaluator` average 0.800 (16/20 cases correct); `IsInstance` 100%.
+- Run 4 (re-verification): `CorrectDecisionEvaluator` average 0.800 (16/20 cases correct); `IsInstance` 100%.
 
-Conclusion: `NativeOutput`-based structured decisions parse reliably via Ollama+Gemma 3 (no schema
-failures observed), but decision *correctness* varies run-to-run (80–100% on this 20-case dataset) — this
-variance is now documented in the README as a caveat rather than silently accepted or silently blocking.
+Conclusion: `NativeOutput`-based structured decisions parse reliably via Ollama+Gemma 3 across all four
+runs (no schema failures, no malformed/unparseable output observed once), but decision *correctness*
+consistently lands in the 80–100% band on this 20-case dataset (3 of 4 runs at exactly 80%, 1 at 100%) —
+this variance is documented in the README as a caveat rather than silently accepted or silently blocking.
 No pass-rate threshold was specified by the user for "good enough to default to `ollama`"; proceeded with
 `ollama` as default per the explicit instruction ("always default to ollama"), with the variance
 documented for the user to judge.
+
+**`gemma3:12b` (the documented default `OLLAMA_MODEL` value) itself remains unvalidated** — every attempt
+to `ollama pull gemma3:12b` (three separate attempts across two sessions) failed with the same
+`max retries exceeded: EOF` error after only ~4KB of the 8.1GB download, confirming this is an
+environment-level constraint rather than a code defect. All eval numbers above are for `gemma3:latest`
+(4.3B) as a stand-in; the code path is identical for any Ollama model name, but 12B-specific accuracy is
+still unverified pending a real pull on unrestricted hardware.
+
+### Full verification performed on 2026-09-22 (post-implementation re-check)
+
+Re-checked out `feature/ollama-local-model-backend` and confirmed the feature is fully built and compiles:
+- `python -m py_compile invitations_manager.py inbox_manager.py evals.py` — OK, no syntax errors.
+- `ruff check .` — all checks passed; `ruff format --check .` — all files already formatted.
+- `pytest tests/playwright/` — 6/6 passed (static-fixture selector tests, no live LinkedIn/Azure needed).
+- Both scripts import cleanly with **zero Azure env vars set**, correctly defaulting to the `ollama`
+  backend and logging `Using model backend=ollama (model_name=gemma3:12b)`.
+- `--model-backend {ollama,azure,fallback}` flag present and documented correctly in `--help` output for
+  both scripts.
+- `build_agent("ollama")` constructs successfully against a real local Ollama server.
+- PR #15 status: `state=OPEN`, `mergeable=MERGEABLE`, `mergeStateStatus=CLEAN` (no merge conflicts with
+  `main`), 605 additions / 32 deletions across 6 files. No CI configured on this repo (confirmed earlier),
+  so `statusCheckRollup` is empty by design, not a failure.
 
 ---
 
