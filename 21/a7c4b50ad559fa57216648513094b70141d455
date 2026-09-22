@@ -1,0 +1,24 @@
+tests/playwright/test_invitation_actions.py
+  s_961c68c3c80ee6::t_147e3cdc8b4093 1-5,11-80
+  s_961c68c3c80ee6::t_4dec3645c7365a 6-10
+tests/playwright/fixtures/invitation_manager_interactive.html
+  s_961c68c3c80ee6::t_03159db247bf0a 1-24
+tests/playwright/fixtures/newsletter_invitations.html
+  s_961c68c3c80ee6::t_64d432eb05da2d 1-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "21a7c4b50ad559fa57216648513094b70141d455",
+  "prompts": {},
+  "sessions": {
+    "s_961c68c3c80ee6": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "76ff59bf-318a-49cd-a9a3-6cbcefba1eb4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  }
+}
