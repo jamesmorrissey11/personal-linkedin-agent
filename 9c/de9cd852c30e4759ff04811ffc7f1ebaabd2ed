@@ -1,0 +1,19 @@
+.gitignore
+  s_961c68c3c80ee6::t_94a80b25b346df 156-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9cde9cd852c30e4759ff04811ffc7f1ebaabd2ed",
+  "prompts": {},
+  "sessions": {
+    "s_961c68c3c80ee6": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "76ff59bf-318a-49cd-a9a3-6cbcefba1eb4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  }
+}
