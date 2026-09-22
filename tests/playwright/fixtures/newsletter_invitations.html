@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<!--
+  Static fixture for exercising invitations_manager.py's ignore_newsletter_invitations()
+  loop, which repeatedly queries `button[aria-label^='Ignore invitation for ']` until none
+  remain. Each button removes itself from the DOM on click (test-only inline onclick, not
+  app code) to mimic LinkedIn removing a handled invite from the page, so the while-loop
+  selector re-query naturally terminates.
+-->
+<html>
+  <body>
+    <main>
+      <button aria-label="Ignore invitation for Weekly Newsletter" onclick="this.remove()">Ignore</button>
+      <button aria-label="Ignore invitation for Product Updates" onclick="this.remove()">Ignore</button>
+    </main>
+  </body>
+</html>
