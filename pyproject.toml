@@ -5,5 +5,5 @@ lint.select = ["E", "F", "I", "UP"]
 lint.ignore = ["D203"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/playwright"]
+testpaths = ["tests"]
 addopts = "--browser chromium"
