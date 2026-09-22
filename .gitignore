@@ -153,3 +153,6 @@ playwright/.auth
 # Playwright test output
 test-results/
 playwright-report/
+
+# Personal editor settings (machine-specific, not portable to other contributors)
+.vscode/
