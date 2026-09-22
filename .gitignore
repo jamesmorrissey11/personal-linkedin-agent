@@ -149,3 +149,7 @@ static/
 .DS_Store
 
 playwright/.auth
+
+# Playwright test output
+test-results/
+playwright-report/

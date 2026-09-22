@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<!--
+  Static, hand-trimmed snapshot of LinkedIn's messaging inbox markup, kept only for the
+  attributes/structure the scraping selectors in inbox_manager.py rely on
+  (li.msg-conversation-listitem, h3.msg-conversation-card__participant-names,
+  li.msg-s-message-list__event and its author/content/timestamp children). This is NOT a
+  live/authenticated page.
+-->
+<html>
+  <body>
+    <main>
+      <ul>
+        <li class="msg-conversation-listitem">
+          <h3 class="msg-conversation-card__participant-names">Alex Recruiter</h3>
+        </li>
+        <li class="msg-conversation-listitem">
+          <h3 class="msg-conversation-card__participant-names">Sam Colleague</h3>
+        </li>
+      </ul>
+      <ul>
+        <li class="msg-s-message-list__event">
+          <span class="msg-s-message-group__name">Sam Colleague</span>
+          <p class="msg-s-event-listitem__body">Hey, can you take a look at the PR when you get a chance?</p>
+          <time class="msg-s-message-group__timestamp">10:02 AM</time>
+        </li>
+        <li class="msg-s-message-list__event">
+          <span class="msg-s-message-group__name">Sam Colleague</span>
+          <p class="msg-s-event-listitem__body">It's blocking the release.</p>
+          <time class="msg-s-message-group__timestamp">10:03 AM</time>
+        </li>
+      </ul>
+    </main>
+  </body>
+</html>
