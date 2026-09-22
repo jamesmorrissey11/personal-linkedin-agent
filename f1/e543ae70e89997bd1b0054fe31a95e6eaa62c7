@@ -1,0 +1,30 @@
+pyproject.toml
+  s_961c68c3c80ee6::t_1bde25066a3236 8
+tests/conftest.py
+  s_961c68c3c80ee6::t_f4f5f248ba70cc 14-33
+  s_961c68c3c80ee6::t_bb10f815f1a717 1-12
+  s_961c68c3c80ee6::t_7e47ad1de983b3 13
+tests/playwright/helpers.py
+  s_961c68c3c80ee6::t_d6eee418f40aac 13-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f1e543ae70e89997bd1b0054fe31a95e6eaa62c7",
+  "prompts": {},
+  "humans": {
+    "h_366b2866816577": {
+      "author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_961c68c3c80ee6": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "76ff59bf-318a-49cd-a9a3-6cbcefba1eb4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  }
+}
