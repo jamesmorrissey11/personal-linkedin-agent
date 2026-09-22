@@ -8,7 +8,10 @@ from openai import AsyncOpenAI
 from playwright.async_api import Page, async_playwright
 from pydantic import BaseModel
 from pydantic_ai import Agent, NativeOutput
+from pydantic_ai.models.fallback import FallbackModel
+from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from rich.logging import RichHandler
 
@@ -17,18 +20,59 @@ logging.basicConfig(level=logging.WARNING, format="%(message)s", datefmt="[%X]",
 logger = logging.getLogger("inbox_manager")
 logger.setLevel(logging.INFO)
 
-# Setup the Azure OpenAI client
 load_dotenv()
-token_provider = azure.identity.get_bearer_token_provider(
-    azure.identity.DefaultAzureCredential(),
-    "https://cognitiveservices.azure.com/.default",
-)
-client = AsyncOpenAI(
-    base_url=os.environ["AZURE_OPENAI_ENDPOINT"],
-    api_key=token_provider,
-)
-model = OpenAIModel(os.environ["AZURE_OPENAI_CHAT_DEPLOYMENT"], provider=OpenAIProvider(openai_client=client))
-logger.info("Using Azure OpenAI with model %s", model.model_name)
+
+# Model backend selection: "ollama" (default, local, no Azure credentials required), "azure", or
+# "fallback" (try Ollama first, fall back to Azure OpenAI on failure). Override via MODEL_BACKEND env
+# var or the --model-backend CLI flag.
+MODEL_BACKEND = os.environ.get("MODEL_BACKEND", "ollama")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:12b")
+
+
+def build_ollama_model() -> OllamaModel:
+    """Build the local Ollama model. Requires `ollama serve` running locally with OLLAMA_MODEL pulled."""
+    return OllamaModel(OLLAMA_MODEL, provider=OllamaProvider(base_url=OLLAMA_BASE_URL))
+
+
+def build_azure_model() -> OpenAIModel:
+    """Build the Azure OpenAI model using this script's existing client-setup pattern.
+
+    Note: this diverges from `invitations_manager.py`'s Azure client setup (base URL suffix, sync vs.
+    async credential, deprecated `OpenAIModel` vs. `OpenAIChatModel`) — see
+    `.github/instructions/python.instructions.md`. Left as-is intentionally; not fixed as part of adding
+    local-model support.
+    """
+    token_provider = azure.identity.get_bearer_token_provider(
+        azure.identity.DefaultAzureCredential(),
+        "https://cognitiveservices.azure.com/.default",
+    )
+    azure_client = AsyncOpenAI(
+        base_url=os.environ["AZURE_OPENAI_ENDPOINT"],
+        api_key=token_provider,
+    )
+    return OpenAIModel(os.environ["AZURE_OPENAI_CHAT_DEPLOYMENT"], provider=OpenAIProvider(openai_client=azure_client))
+
+
+def build_model(backend: str):
+    """Build the Pydantic AI model for the given backend ("ollama", "azure", or "fallback").
+
+    Azure credentials are only read/required when "azure" or "fallback" is selected, so the default
+    "ollama" backend never assumes Azure OpenAI is configured or reachable.
+    """
+    if backend == "ollama":
+        chosen_model = build_ollama_model()
+    elif backend == "azure":
+        chosen_model = build_azure_model()
+    elif backend == "fallback":
+        chosen_model = FallbackModel(build_ollama_model(), build_azure_model())
+    else:
+        raise ValueError(f"Unknown model backend: {backend!r}. Expected 'ollama', 'azure', or 'fallback'.")
+    logger.info("Using model backend=%s", backend)
+    return chosen_model
+
+
+model = build_model(MODEL_BACKEND)
 
 
 class MessageRanking(BaseModel):
@@ -329,6 +373,15 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Manage LinkedIn inbox messages.")
     parser.add_argument("--num-messages", type=int, default=20, help="Number of recent inbox messages to analyze (default: 20).")
+    parser.add_argument(
+        "--model-backend",
+        choices=["ollama", "azure", "fallback"],
+        default=None,
+        help=f"Model backend to use (default: MODEL_BACKEND env var, currently {MODEL_BACKEND!r}).",
+    )
     args = parser.parse_args()
+
+    if args.model_backend and args.model_backend != MODEL_BACKEND:
+        model = build_model(args.model_backend)
 
     asyncio.run(manage_linkedin_inbox(args.num_messages))
