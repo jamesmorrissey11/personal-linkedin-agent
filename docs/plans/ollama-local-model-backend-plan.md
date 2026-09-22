@@ -65,12 +65,18 @@ No pass-rate threshold was specified by the user for "good enough to default to 
 `ollama` as default per the explicit instruction ("always default to ollama"), with the variance
 documented for the user to judge.
 
-**`gemma3:12b` (the documented default `OLLAMA_MODEL` value) itself remains unvalidated** — every attempt
-to `ollama pull gemma3:12b` (three separate attempts across two sessions) failed with the same
-`max retries exceeded: EOF` error after only ~4KB of the 8.1GB download, confirming this is an
-environment-level constraint rather than a code defect. All eval numbers above are for `gemma3:latest`
-(4.3B) as a stand-in; the code path is identical for any Ollama model name, but 12B-specific accuracy is
-still unverified pending a real pull on unrestricted hardware.
+**`gemma3:12b` (previously documented as the default `OLLAMA_MODEL` value) has been changed.** After
+repeated confirmed failures pulling `gemma3:12b` in every sandboxed environment tried (3 attempts, always
+`max retries exceeded: EOF` at ~4KB of the 8.1GB download), and on explicit user direction to use the
+`gemma3` model that was actually pulled and available (`gemma3:latest`, the `4b` tag per Ollama's own
+model listing — 3.3GB, confirmed via the Ollama models page), **the default `OLLAMA_MODEL` in both
+scripts was changed from `gemma3:12b` to `gemma3:latest`.** This is now the actual, validated default —
+not a stand-in substitute for an unverified 12B target. `README.md` and `docs/ARCHITECTURE.md` were
+updated to match, and `gemma3:12b`/`gemma3:27b` are now documented as optional larger upgrades a user can
+opt into via `OLLAMA_MODEL` if they have the bandwidth/memory, explicitly noted as untested in this repo.
+Re-ran `python evals.py` with **zero env overrides** (true default code path) to confirm:
+`CorrectDecisionEvaluator` 0.800, `IsInstance` 100% — consistent with the four prior `gemma3:latest` runs
+(0.80, 1.00, 0.80, 0.80).
 
 ### Full verification performed on 2026-09-22 (post-implementation re-check)
 

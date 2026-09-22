@@ -41,7 +41,7 @@ load_dotenv()
 # var or the --model-backend CLI flag.
 MODEL_BACKEND = os.environ.get("MODEL_BACKEND", "ollama")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:12b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:latest")
 
 
 def build_ollama_model() -> OllamaModel:

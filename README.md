@@ -121,13 +121,18 @@ fallback for) Azure OpenAI. **Ollama is the default backend** — you can run ei
 Azure setup at all as long as Ollama is installed and running locally.
 
 1. [Install Ollama](https://ollama.com/download) and start it (`ollama serve`, or launch the desktop app).
-2. Pull a Gemma 3 model. `gemma3:12b` is the size recommended for a reasonable
-   quality/speed tradeoff on an Apple Silicon Mac (unified memory permitting); smaller sizes (`gemma3:4b`,
-   `gemma3:1b`) are faster and lighter if 12B is too slow/large for your machine:
+2. Pull a Gemma 3 model. **`gemma3:latest` (the `4b` tag, 3.3GB) is the default and what's been validated
+   against this project's evals** — it's fast enough for interactive use on Apple Silicon and doesn't
+   require a large download:
 
     ```shell
-    ollama pull gemma3:12b
+    ollama pull gemma3
     ```
+
+   Larger sizes (`gemma3:12b`, 8.1GB; `gemma3:27b`, 17GB) offer better quality/reasoning at the cost of
+   slower responses and a much bigger download — set `OLLAMA_MODEL` accordingly if you have the memory and
+   bandwidth for one and want to compare results. Only `gemma3:latest` (4B) has actually been validated
+   against `linkedin_invitation_cases.yaml` in this project so far; larger sizes are untested here.
 
 3. Choose the backend with the `--model-backend` flag (or the `MODEL_BACKEND` env var in `.env`):
 
@@ -147,14 +152,14 @@ Azure setup at all as long as Ollama is installed and running locally.
     ```shell
     MODEL_BACKEND=ollama
     OLLAMA_BASE_URL=http://localhost:11434/v1
-    OLLAMA_MODEL=gemma3:12b
+    OLLAMA_MODEL=gemma3:latest
     ```
 
 **Known caveat:** Gemma 3's structured-output reliability through Ollama's OpenAI-compatible API is not
 as consistent as larger frontier models — in local testing against `linkedin_invitation_cases.yaml`
-(via `python evals.py`), correctness scores varied between 80–100% across runs with `gemma3:4b`, with no
-malformed/unparseable outputs observed. Validate against your own eval cases before relying on the
-`ollama` or `fallback` backend for unattended runs. See
+(via `python evals.py`), correctness scores varied between 80–100% across four separate runs with
+`gemma3:latest` (4B), with no malformed/unparseable outputs observed in any run. Validate against your own
+eval cases before relying on the `ollama` or `fallback` backend for unattended runs. See
 [`docs/reports/local-model-serving-for-gemma3.md`](docs/reports/local-model-serving-for-gemma3.md) for the
 full research behind this choice (framework comparison, benchmarks, licensing).
 
