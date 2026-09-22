@@ -27,7 +27,17 @@ AI-powered LinkedIn automation. An LLM (Azure OpenAI, via [Pydantic AI](https://
 |---|---|
 | `invitations_manager.py` | Scrapes invitation cards, asks an `Agent` to decide accept/ignore/undecided per invitation, clicks the corresponding button. Falls back to loading the full profile page when the agent is undecided. See [Running the invitation manager](../README.md#running-the-invitation-manager). |
 | `inbox_manager.py` | Scrapes recent conversations, asks a separate `Agent` to score each thread's reply urgency (1-10), opens the highest-urgency thread. See [Running the inbox manager](../README.md#running-the-inbox-manager). |
-| `evals.py` | Runs `pydantic_evals` regression checks (`CorrectDecisionEvaluator`, `IsInstance`) against the invitation-decision agent using cases from `linkedin_invitation_cases.yaml`. |
+| `evals.py` | Runs `pydantic_evals` regression checks (`CorrectDecisionEvaluator`, `IsInstance`) against the invitation-decision agent using cases from `linkedin_invitation_cases.yaml`. Since `agent` is imported directly from `invitations_manager`, it evaluates against whatever `MODEL_BACKEND` resolves to (`ollama` by default). |
+
+### Model backend selection
+
+Both entry points build their Pydantic AI model via a `build_model(backend)` function (`invitations_manager.py:build_model`, `inbox_manager.py:build_model`), selectable per-script via a `--model-backend {ollama,azure,fallback}` CLI flag or the `MODEL_BACKEND` env var:
+
+* **`ollama` (default)** — local [Ollama](https://ollama.com) server via Pydantic AI's `OllamaModel`/`OllamaProvider`, targeting `OLLAMA_MODEL` (default `gemma3:12b`) at `OLLAMA_BASE_URL` (default `http://localhost:11434/v1`). No Azure credentials are read or required in this mode.
+* **`azure`** — Azure OpenAI only, using each script's existing (and intentionally divergent — see Known Issues) client-setup code.
+* **`fallback`** — `pydantic_ai.models.fallback.FallbackModel(ollama_model, azure_model)`: tries Ollama first, falls back to Azure OpenAI on failure. Verified locally that `FallbackModel`'s default `fallback_on` (which only lists `ModelAPIError`) still triggers correctly even when Ollama is fully unreachable (connection refused), so no `fallback_on` override was needed.
+
+Azure client construction is lazy (inside `build_azure_model()`), so importing either module, or running with the default `ollama` backend, never requires `AZURE_TENANT_ID`/`AZURE_OPENAI_*` env vars to be set. See [`docs/reports/local-model-serving-for-gemma3.md`](reports/local-model-serving-for-gemma3.md) for the research behind choosing Ollama over llama.cpp/LM Studio/MLX/vLLM.
 
 ### Data layer
 
@@ -35,7 +45,7 @@ No database. All state is file-based:
 
 * `playwright/.auth/state.json` — cached Playwright browser storage state (cookies/session) written after a manual LinkedIn login, so subsequent runs skip re-authenticating. Shared by both `invitations_manager.py` and `inbox_manager.py`.
 * `linkedin_invitation_cases.yaml` — eval dataset consumed by `evals.py`; also appended to at runtime by `invitations_manager.py` when run with `--record-eval-cases`.
-* `.env` — Azure OpenAI endpoint/deployment config, generated post-provision by `infra/write_dot_env.sh` / `.ps1` (see [Azure Infra Stack](#azure-infra-stack)).
+* `.env` — Azure OpenAI endpoint/deployment config, generated post-provision by `infra/write_dot_env.sh` / `.ps1` (see [Azure Infra Stack](#azure-infra-stack)); also where `MODEL_BACKEND`/`OLLAMA_BASE_URL`/`OLLAMA_MODEL` may optionally be set (these are not `azd`-provisioned outputs, so they are not written by the postprovision hooks).
 
 ### Templates
 
