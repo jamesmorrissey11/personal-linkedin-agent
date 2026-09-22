@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<!-- Static fixture: a profile page whose <main> element is present but has no text content. -->
+<html>
+  <body>
+    <!-- Non-zero size so Playwright's wait_for_selector (default state="visible") finds
+         it, while inner_text() still trims to an empty string. -->
+    <main style="display: block; min-height: 20px; min-width: 20px;">   </main>
+  </body>
+</html>

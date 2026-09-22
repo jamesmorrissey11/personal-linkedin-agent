@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<!--
+  Static fixture for exercising invitations_manager.py's execute_action() click flow.
+  Buttons carry a minimal inline onclick handler (test-only, not app code) that marks
+  themselves as clicked via a data attribute, so tests can assert the click happened
+  without a live LinkedIn session or any JavaScript app logic.
+-->
+<html>
+  <body>
+    <main>
+      <!-- Card with both Accept and Ignore buttons -->
+      <div role="listitem" id="card-both">
+        <a href="/in/jane-doe-123456">Jane Doe</a>
+        <button aria-label="Ignore an invitation to connect from Jane Doe" onclick="this.setAttribute('data-clicked', 'true')">Ignore</button>
+        <button aria-label="Accept Jane Doe's invitation to connect" onclick="this.setAttribute('data-clicked', 'true')">Accept</button>
+      </div>
+      <!-- Card with only an Accept button (no Ignore button present) -->
+      <div role="listitem" id="card-accept-only">
+        <a href="/in/some-recruiter-789">Some Recruiter</a>
+        <button aria-label="Accept Some Recruiter's invitation to connect" onclick="this.setAttribute('data-clicked', 'true')">Accept</button>
+      </div>
+    </main>
+  </body>
+</html>

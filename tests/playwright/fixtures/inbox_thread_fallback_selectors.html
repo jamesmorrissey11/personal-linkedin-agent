@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<!--
+  Static fixture for inbox_manager.py's fallback selector chains in get_inbox_messages():
+  when `.msg-s-message-group__name` is absent, it falls back to
+  `a .msg-s-message-group__profile-link`; when `time.msg-s-message-group__timestamp` is
+  absent, it falls back to `time.msg-s-message-list__time-heading`.
+-->
+<html>
+  <body>
+    <main>
+      <ul>
+        <li class="msg-conversation-listitem">
+          <h3 class="msg-conversation-card__participant-names">Sam Colleague</h3>
+        </li>
+      </ul>
+      <ul>
+        <li class="msg-s-message-list__event">
+          <a href="/in/sam-colleague"><span class="msg-s-message-group__profile-link">Sam Colleague</span></a>
+          <p class="msg-s-event-listitem__body">Following up on the release blocker.</p>
+          <time class="msg-s-message-list__time-heading">Yesterday 4:15 PM</time>
+        </li>
+      </ul>
+    </main>
+  </body>
+</html>
