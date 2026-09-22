@@ -1,0 +1,24 @@
+.github/agents/playwright-selector-maintainer.agent.md
+  s_94354d0b8f6f50::t_5281c1b93d47ad 1-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "391a24f6f79807669ec8b9e2ea56bde4fb4cdefa",
+  "prompts": {},
+  "humans": {
+    "h_366b2866816577": {
+      "author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_94354d0b8f6f50": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "526019cb-4d7e-4edb-b478-1412bc81e5bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  }
+}
