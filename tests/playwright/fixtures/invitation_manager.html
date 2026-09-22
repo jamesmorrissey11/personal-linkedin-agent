@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<!--
+  Static, hand-trimmed snapshot of LinkedIn's invitation-manager page markup, kept only for the
+  attributes/structure the scraping selectors in invitations_manager.py rely on
+  (INVITATION_CARD_SELECTORS, aria-label based Accept/Ignore buttons, and the
+  "Ignore invitation for " newsletter-invite button). This is NOT a live/authenticated page.
+-->
+<html>
+  <body>
+    <main>
+      <div role="listitem">
+        <a href="/in/jane-doe-123456">Jane Doe</a>
+        <button aria-label="Ignore an invitation to connect from Jane Doe">Ignore</button>
+        <button aria-label="Accept Jane Doe's invitation to connect">Accept</button>
+      </div>
+      <div role="listitem">
+        <a href="/in/john-smith-654321">John Smith</a>
+        <button aria-label="Ignore an invitation to connect from John Smith">Ignore</button>
+        <button aria-label="Accept John Smith's invitation to connect">Accept</button>
+      </div>
+      <div componentkey="auto-component-1">
+        <a href="/in/some-recruiter-789">Some Recruiter</a>
+        <button aria-label="Accept Some Recruiter's invitation to connect">Accept</button>
+      </div>
+      <button aria-label="Ignore invitation for Weekly Newsletter">Ignore</button>
+    </main>
+  </body>
+</html>
