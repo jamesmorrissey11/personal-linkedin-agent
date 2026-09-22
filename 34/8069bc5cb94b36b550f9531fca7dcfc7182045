@@ -1,0 +1,18 @@
+.github/skills/make-repo-contribution/assets/pr-template.md
+  h_366b2866816577 1-36
+.github/skills/make-repo-contribution/SKILL.md
+  h_366b2866816577 1-90
+.github/skills/make-repo-contribution/assets/issue-template.md
+  h_366b2866816577 1-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "348069bc5cb94b36b550f9531fca7dcfc7182045",
+  "prompts": {},
+  "humans": {
+    "h_366b2866816577": {
+      "author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  }
+}
