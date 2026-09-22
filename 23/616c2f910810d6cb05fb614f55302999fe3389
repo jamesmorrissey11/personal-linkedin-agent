@@ -1,0 +1,28 @@
+tests/playwright/fixtures/profile_page_no_main.html
+  s_961c68c3c80ee6::t_ec63e6d4e8b6b1 1-10
+tests/playwright/test_profile_fallback.py
+  s_961c68c3c80ee6::t_3ff1123d3a9eaa 10-12
+  s_961c68c3c80ee6::t_76014991cd38bc 27-31
+  s_961c68c3c80ee6::t_9aaeea3b0f2ae6 1-9,13-26,32-55
+tests/playwright/fixtures/profile_page.html
+  s_961c68c3c80ee6::t_7142beeeb2716a 1-11
+tests/playwright/fixtures/profile_page_empty.html
+  s_961c68c3c80ee6::t_4e2abbd512ce63 5-7
+  s_961c68c3c80ee6::t_0b505400e80982 1-4,8-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "23616c2f910810d6cb05fb614f55302999fe3389",
+  "prompts": {},
+  "sessions": {
+    "s_961c68c3c80ee6": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "76ff59bf-318a-49cd-a9a3-6cbcefba1eb4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  }
+}
