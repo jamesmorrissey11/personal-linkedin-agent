@@ -1,0 +1,19 @@
+docs/TESTING.md
+  s_94354d0b8f6f50::t_576dc695dfea33 1-53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "98b49726b6c34d4549ca92af3791c10d54c77f84",
+  "prompts": {},
+  "sessions": {
+    "s_94354d0b8f6f50": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "526019cb-4d7e-4edb-b478-1412bc81e5bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  }
+}
