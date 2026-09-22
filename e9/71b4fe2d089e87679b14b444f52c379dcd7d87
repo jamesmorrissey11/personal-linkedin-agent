@@ -1,0 +1,21 @@
+tests/playwright/fixtures/inbox_conversation_flow.html
+  s_961c68c3c80ee6::t_6e66592d783c3c 1-50
+tests/playwright/test_inbox_conversation_flow.py
+  s_961c68c3c80ee6::t_ac545f38459493 1-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e971b4fe2d089e87679b14b444f52c379dcd7d87",
+  "prompts": {},
+  "sessions": {
+    "s_961c68c3c80ee6": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "76ff59bf-318a-49cd-a9a3-6cbcefba1eb4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  }
+}
