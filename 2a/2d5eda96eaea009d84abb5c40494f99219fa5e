@@ -1,0 +1,48 @@
+docs/ARCHITECTURE.md
+  s_a889063d72a854::t_d3c4dec0169c2d 1-73
+docs/repo-summary.md
+  s_a889063d72a854::t_23fa2b291e063f 1-2
+  s_a889063d72a854::t_005b9a6fd8a54d 3-63
+docs/readme-vs-code-comparison.md
+  s_a889063d72a854::t_05f697e429b1a7 1-38
+README.md
+  s_a889063d72a854::t_19c3872fe2ee3a 33
+  s_a889063d72a854::t_4a0296c3542de8 45
+  s_a889063d72a854::t_10def3da627d2e 60-61,77-80
+  s_a889063d72a854::t_80211e097d88c4 163-166
+  s_a889063d72a854::t_7d2913f3a15277 125-152
+  s_a889063d72a854::t_9bbf9e9ab77387 3-4
+  s_a889063d72a854::t_fda9688630f384 16,19
+  h_366b2866816577 8-15,17-18,20,117-119
+  s_a889063d72a854::t_9fe750bde94445 81-82
+  s_56571509d706ef::t_b9508571d4caa5 120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2a2d5eda96eaea009d84abb5c40494f99219fa5e",
+  "prompts": {},
+  "humans": {
+    "h_366b2866816577": {
+      "author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_56571509d706ef": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "d356f307-0a18-414c-af3f-1a69ea3e32c4",
+        "model": "unknown"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    },
+    "s_a889063d72a854": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "9fe10e72-ae5a-45e1-a0b1-3f009e16f30f",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  }
+}
