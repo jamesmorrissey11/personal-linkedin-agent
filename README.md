@@ -116,7 +116,47 @@ This project uses Azure OpenAI and includes infrastructure as code (IaC) to prov
 
 ## Configuring Ollama Models
 
-#TODO: Add support for Ollama models run on Mac as replacement for Azure OpenAI  
+Both agent scripts can run against a local [Ollama](https://ollama.com) model instead of (or as a
+fallback for) Azure OpenAI. **Ollama is the default backend** — you can run either script without any
+Azure setup at all as long as Ollama is installed and running locally.
+
+1. [Install Ollama](https://ollama.com/download) and start it (`ollama serve`, or launch the desktop app).
+2. Pull a Gemma 3 model. `gemma3:12b` is the size recommended for a reasonable
+   quality/speed tradeoff on an Apple Silicon Mac (unified memory permitting); smaller sizes (`gemma3:4b`,
+   `gemma3:1b`) are faster and lighter if 12B is too slow/large for your machine:
+
+    ```shell
+    ollama pull gemma3:12b
+    ```
+
+3. Choose the backend with the `--model-backend` flag (or the `MODEL_BACKEND` env var in `.env`):
+
+    | Value | Behavior |
+    |---|---|
+    | `ollama` (default) | Uses the local Ollama model only. No Azure credentials required. |
+    | `azure` | Uses Azure OpenAI only, exactly as configured in [Configuring Azure AI models](#configuring-azure-ai-models). |
+    | `fallback` | Tries Ollama first, and falls back to Azure OpenAI if the local model call fails (e.g. Ollama isn't running). **Still requires Azure credentials to be configured** (as in `azure` mode above) since both models are constructed at startup. |
+
+    ```shell
+    python invitations_manager.py --model-backend ollama
+    python inbox_manager.py --model-backend fallback
+    ```
+
+   To change the default without passing a flag every time, set in `.env`:
+
+    ```shell
+    MODEL_BACKEND=ollama
+    OLLAMA_BASE_URL=http://localhost:11434/v1
+    OLLAMA_MODEL=gemma3:12b
+    ```
+
+**Known caveat:** Gemma 3's structured-output reliability through Ollama's OpenAI-compatible API is not
+as consistent as larger frontier models — in local testing against `linkedin_invitation_cases.yaml`
+(via `python evals.py`), correctness scores varied between 80–100% across runs with `gemma3:4b`, with no
+malformed/unparseable outputs observed. Validate against your own eval cases before relying on the
+`ollama` or `fallback` backend for unattended runs. See
+[`docs/reports/local-model-serving-for-gemma3.md`](docs/reports/local-model-serving-for-gemma3.md) for the
+full research behind this choice (framework comparison, benchmarks, licensing).
 
 ## Running the invitation manager
 
@@ -131,6 +171,7 @@ Available flags:
 * `--num-to-process` (default `10`): number of invitations to process before stopping.
 * `--record-eval-cases`: append each processed invitation as a new case to `linkedin_invitation_cases.yaml`, for later use with `evals.py`.
 * `--headless`: run the browser without a visible window.
+* `--model-backend` (`ollama` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring Ollama Models](#configuring-ollama-models).
 
 On first run (or whenever the saved session expires), a browser window opens to `linkedin.com/login` and waits for you to log in manually; the resulting session is cached to `playwright/.auth/state.json` so future runs skip the login step.
 
@@ -145,6 +186,7 @@ python inbox_manager.py --num-messages 20
 Available flags:
 
 * `--num-messages` (default `20`): number of recent conversations to analyze.
+* `--model-backend` (`ollama` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring Ollama Models](#configuring-ollama-models).
 
 It reuses the same `playwright/.auth/state.json` login session as the invitation manager. Unlike `invitations_manager.py`, it does not currently support `--headless`.
 
@@ -153,6 +195,14 @@ It reuses the same `playwright/.auth/state.json` login session as the invitation
 ## Running evaluations
 
 This project includes evaluations using Pydantic-AI evals to measure the agent's performance. You can run the evaluations by executing the `evals.py` script.
+
+`evals.py` imports the `agent` object directly from `invitations_manager.py`, so it evaluates whichever backend `MODEL_BACKEND` resolves to at import time (`ollama` by default — see [Configuring Ollama Models](#configuring-ollama-models)). To evaluate against Azure OpenAI instead, set `MODEL_BACKEND=azure` (or `fallback`) before running:
+
+```shell
+MODEL_BACKEND=azure python evals.py
+```
+
+Recorded/appended cases (via `invitations_manager.py --record-eval-cases`) include a `metadata.model_name` field identifying which model actually produced each decision (useful when running in `fallback` mode, since the local model may have failed over to Azure for a given call).
 
 ## Cost estimate
 

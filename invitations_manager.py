@@ -15,7 +15,10 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import BaseModel
 from pydantic_ai import Agent, NativeOutput
+from pydantic_ai.models.fallback import FallbackModel
+from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from rich.logging import RichHandler
 
@@ -31,18 +34,56 @@ INVITATION_CARD_SELECTORS = [
     "main div[componentkey^='auto-component-']:has(button[aria-label*='Accept'])",
 ]
 
-# Setup the Azure OpenAI client
 load_dotenv()
-token_provider = azure.identity.aio.get_bearer_token_provider(
-    azure.identity.aio.AzureDeveloperCliCredential(tenant_id=os.environ["AZURE_TENANT_ID"]),
-    "https://cognitiveservices.azure.com/.default",
-)
-client = AsyncOpenAI(
-    base_url=os.environ["AZURE_OPENAI_ENDPOINT"] + "/openai/v1",
-    api_key=token_provider,
-)
-model = OpenAIChatModel(os.environ["AZURE_OPENAI_CHAT_DEPLOYMENT"], provider=OpenAIProvider(openai_client=client))
-logger.info("Using Azure OpenAI with model %s", model.model_name)
+
+# Model backend selection: "ollama" (default, local, no Azure credentials required), "azure", or
+# "fallback" (try Ollama first, fall back to Azure OpenAI on failure). Override via MODEL_BACKEND env
+# var or the --model-backend CLI flag.
+MODEL_BACKEND = os.environ.get("MODEL_BACKEND", "ollama")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:12b")
+
+
+def build_ollama_model() -> OllamaModel:
+    """Build the local Ollama model. Requires `ollama serve` running locally with OLLAMA_MODEL pulled."""
+    return OllamaModel(OLLAMA_MODEL, provider=OllamaProvider(base_url=OLLAMA_BASE_URL))
+
+
+def build_azure_model() -> OpenAIChatModel:
+    """Build the Azure OpenAI model using this script's known-working client-setup pattern."""
+    required_vars = ["AZURE_TENANT_ID", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_CHAT_DEPLOYMENT"]
+    missing_vars = [var for var in required_vars if not os.environ.get(var)]
+    if missing_vars:
+        raise RuntimeError(f"Missing required Azure OpenAI environment variable(s) for --model-backend azure/fallback: {', '.join(missing_vars)}. Set them in .env, or use --model-backend ollama (the default) to run without Azure credentials.")
+    token_provider = azure.identity.aio.get_bearer_token_provider(
+        azure.identity.aio.AzureDeveloperCliCredential(tenant_id=os.environ["AZURE_TENANT_ID"]),
+        "https://cognitiveservices.azure.com/.default",
+    )
+    azure_client = AsyncOpenAI(
+        base_url=os.environ["AZURE_OPENAI_ENDPOINT"] + "/openai/v1",
+        api_key=token_provider,
+    )
+    return OpenAIChatModel(os.environ["AZURE_OPENAI_CHAT_DEPLOYMENT"], provider=OpenAIProvider(openai_client=azure_client))
+
+
+def build_model(backend: str):
+    """Build the Pydantic AI model for the given backend ("ollama", "azure", or "fallback").
+
+    Azure credentials are only read/required when "azure" or "fallback" is selected, so the default
+    "ollama" backend never assumes Azure OpenAI is configured or reachable. Note that "fallback"
+    constructs the Azure model eagerly (FallbackModel requires both models up front), so Azure
+    credentials must still be present at startup even though Ollama is tried first at request time.
+    """
+    if backend == "ollama":
+        chosen_model = build_ollama_model()
+    elif backend == "azure":
+        chosen_model = build_azure_model()
+    elif backend == "fallback":
+        chosen_model = FallbackModel(build_ollama_model(), build_azure_model())
+    else:
+        raise ValueError(f"Unknown model backend: {backend!r}. Expected 'ollama', 'azure', or 'fallback'.")
+    logger.info("Using model backend=%s (model_name=%s)", backend, chosen_model.model_name)
+    return chosen_model
 
 
 class InvitationAction(Enum):
@@ -64,16 +105,25 @@ class Invitation(BaseModel):
     decision: InvitationDecision | None = None
 
 
-agent = Agent(
-    model,
-    system_prompt="""Decide whether to accept or ignore LinkedIn invitations based on the profile information provided.
+INVITATION_DECISION_SYSTEM_PROMPT = """Decide whether to accept or ignore LinkedIn invitations based on the profile information provided.
 Always ignore wealth advisors, financial advisors, financial planners, investment advisors, and wealth management professionals. Apply this rule first. It overrides every acceptance criterion, including technical roles, mutual connections, and employment at Microsoft.
 Always ignore profiles that appear to be coaches (for example: coach, coaching, life coach, executive coach, career coach, leadership coach, mindset coach, or sales coach). This exclusion also overrides every acceptance criterion.
 Otherwise, accept if the person has a technical role, or is a student studying Computer Science, Data Science, or Machine Learning, or has mutual connections, or works at Microsoft.
 Ignore recruiters.
-If you have any uncertainty at all as to whether the person meets the acceptance criteria, respond with 'undecided'.""",
-    output_type=NativeOutput(InvitationDecision),
-)
+If you have any uncertainty at all as to whether the person meets the acceptance criteria, respond with 'undecided'."""
+
+
+def build_agent(backend: str) -> Agent:
+    return Agent(
+        build_model(backend),
+        system_prompt=INVITATION_DECISION_SYSTEM_PROMPT,
+        output_type=NativeOutput(InvitationDecision),
+    )
+
+
+# Built at import time using MODEL_BACKEND so `evals.py`'s `from invitations_manager import agent` works
+# without requiring CLI args; `--model-backend` (if passed) rebuilds this in the __main__ block below.
+agent = build_agent(MODEL_BACKEND)
 
 
 async def run_and_log_agent(case_name: str, input_message: str):
@@ -93,7 +143,7 @@ async def run_and_log_agent(case_name: str, input_message: str):
         }
         if decision
         else None,
-        "metadata": {},
+        "metadata": {"model_name": agent_result.response.model_name},
     }
     out_path = Path(log_path)
     if out_path.exists():
@@ -415,6 +465,15 @@ if __name__ == "__main__":
     parser.add_argument("--num-to-process", type=int, default=10, help="Number of LinkedIn invitations to process (default: 10).")
     parser.add_argument("--record-eval-cases", action="store_true", help="Record eval cases to YAML file.")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode.")
+    parser.add_argument(
+        "--model-backend",
+        choices=["ollama", "azure", "fallback"],
+        default=None,
+        help=f"Model backend to use (default: MODEL_BACKEND env var, currently {MODEL_BACKEND!r}).",
+    )
     args = parser.parse_args()
+
+    if args.model_backend and args.model_backend != MODEL_BACKEND:
+        agent = build_agent(args.model_backend)
 
     asyncio.run(process_linkedin_invitations(args.num_to_process, record_eval_cases=args.record_eval_cases, headless=args.headless))
