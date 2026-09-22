@@ -1,0 +1,21 @@
+tests/playwright/test_inbox_fallback_selectors.py
+  s_961c68c3c80ee6::t_c99cbf4b9f03ca 1-33
+tests/playwright/fixtures/inbox_thread_fallback_selectors.html
+  s_961c68c3c80ee6::t_0229de88e19fb0 1-25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e24c1ef18e0549dfa79955719c4d97f59172b96d",
+  "prompts": {},
+  "sessions": {
+    "s_961c68c3c80ee6": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "76ff59bf-318a-49cd-a9a3-6cbcefba1eb4",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "James Morrissey <jpm11github@gmail.com>"
+    }
+  }
+}
