@@ -43,6 +43,10 @@ def build_azure_model() -> OpenAIModel:
     `.github/instructions/python.instructions.md`. Left as-is intentionally; not fixed as part of adding
     local-model support.
     """
+    required_vars = ["AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_CHAT_DEPLOYMENT"]
+    missing_vars = [var for var in required_vars if not os.environ.get(var)]
+    if missing_vars:
+        raise RuntimeError(f"Missing required Azure OpenAI environment variable(s) for --model-backend azure/fallback: {', '.join(missing_vars)}. Set them in .env, or use --model-backend ollama (the default) to run without Azure credentials.")
     token_provider = azure.identity.get_bearer_token_provider(
         azure.identity.DefaultAzureCredential(),
         "https://cognitiveservices.azure.com/.default",
@@ -58,7 +62,9 @@ def build_model(backend: str):
     """Build the Pydantic AI model for the given backend ("ollama", "azure", or "fallback").
 
     Azure credentials are only read/required when "azure" or "fallback" is selected, so the default
-    "ollama" backend never assumes Azure OpenAI is configured or reachable.
+    "ollama" backend never assumes Azure OpenAI is configured or reachable. Note that "fallback"
+    constructs the Azure model eagerly (FallbackModel requires both models up front), so Azure
+    credentials must still be present at startup even though Ollama is tried first at request time.
     """
     if backend == "ollama":
         chosen_model = build_ollama_model()
@@ -68,7 +74,7 @@ def build_model(backend: str):
         chosen_model = FallbackModel(build_ollama_model(), build_azure_model())
     else:
         raise ValueError(f"Unknown model backend: {backend!r}. Expected 'ollama', 'azure', or 'fallback'.")
-    logger.info("Using model backend=%s", backend)
+    logger.info("Using model backend=%s (model_name=%s)", backend, chosen_model.model_name)
     return chosen_model
 
 

@@ -135,7 +135,7 @@ Azure setup at all as long as Ollama is installed and running locally.
     |---|---|
     | `ollama` (default) | Uses the local Ollama model only. No Azure credentials required. |
     | `azure` | Uses Azure OpenAI only, exactly as configured in [Configuring Azure AI models](#configuring-azure-ai-models). |
-    | `fallback` | Tries Ollama first, and falls back to Azure OpenAI if the local model call fails (e.g. Ollama isn't running). |
+    | `fallback` | Tries Ollama first, and falls back to Azure OpenAI if the local model call fails (e.g. Ollama isn't running). **Still requires Azure credentials to be configured** (as in `azure` mode above) since both models are constructed at startup. |
 
     ```shell
     python invitations_manager.py --model-backend ollama
@@ -195,6 +195,14 @@ It reuses the same `playwright/.auth/state.json` login session as the invitation
 ## Running evaluations
 
 This project includes evaluations using Pydantic-AI evals to measure the agent's performance. You can run the evaluations by executing the `evals.py` script.
+
+`evals.py` imports the `agent` object directly from `invitations_manager.py`, so it evaluates whichever backend `MODEL_BACKEND` resolves to at import time (`ollama` by default — see [Configuring Ollama Models](#configuring-ollama-models)). To evaluate against Azure OpenAI instead, set `MODEL_BACKEND=azure` (or `fallback`) before running:
+
+```shell
+MODEL_BACKEND=azure python evals.py
+```
+
+Recorded/appended cases (via `invitations_manager.py --record-eval-cases`) include a `metadata.model_name` field identifying which model actually produced each decision (useful when running in `fallback` mode, since the local model may have failed over to Azure for a given call).
 
 ## Cost estimate
 
