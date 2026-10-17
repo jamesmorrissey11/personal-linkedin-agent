@@ -102,7 +102,7 @@ async def open_linkedin(headless: bool, unattended: bool, approval: ApprovedActi
             browser = await p.chromium.launch(headless=headless)
             try:
                 context = await browser.new_context(storage_state="playwright/.auth/state.json")
-                await install_linkedin_write_guard(context)
+                await install_linkedin_write_guard(context, approval)
                 page = await context.new_page()
                 await page.goto("https://www.linkedin.com/feed")
                 if not page.url.startswith("https://www.linkedin.com/feed"):

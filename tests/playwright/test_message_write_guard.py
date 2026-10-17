@@ -8,16 +8,19 @@ import pytest
 from playwright.async_api import async_playwright
 
 import linkedin_guard
-from linkedin_guard import blocked_writes, install_linkedin_write_guard, reset_blocked_writes, safe_click
+from linkedin_guard import ApprovedAction, blocked_writes, install_linkedin_write_guard, reset_blocked_writes, safe_click
 from tests.async_helpers import run_async_test
 from tests.playwright.helpers import FIXTURES_DIR
 
 PAGE_URL = "https://www.linkedin.com/messaging/"
 WRITE_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage"
 READ_URL = "https://www.linkedin.com/voyager/api/messaging/conversations"
+ARCHIVE_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingGraphQL/graphql?action=archive"
+READ_RECEIPT_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerConversations?action=markRead"
+POST_JS = "url => fetch(url, {method: 'POST', body: '{}'}).then(() => 'ok', () => 'failed')"
 
 
-def run_scenario(scenario, headless=True):
+def run_scenario(scenario, headless=True, approval=None):
     async def runner():
         reset_blocked_writes()
         hits = []
@@ -36,13 +39,14 @@ def run_scenario(scenario, headless=True):
             browser = await playwright.chromium.launch(headless=headless)
             context = await browser.new_context()
             await context.route("https://www.linkedin.com/**", fake_linkedin)
-            await install_linkedin_write_guard(context)
+            await install_linkedin_write_guard(context, approval)
             page = await context.new_page()
             await page.goto(PAGE_URL)
             try:
                 return await scenario(page, hits)
             finally:
                 await browser.close()
+                reset_blocked_writes()
 
     return run_async_test(runner)
 
@@ -123,3 +127,65 @@ def test_composer_fill_is_refused():
         assert (await page.inner_text("#composer")).strip() == ""
 
     run_scenario(scenario)
+
+
+def test_approved_context_allows_exactly_one_send():
+    async def scenario(page, hits):
+        first = await page.evaluate(POST_JS, WRITE_URL)
+        second = await page.evaluate(POST_JS, WRITE_URL)
+        assert (first, second) == ("ok", "failed")
+        assert len(hits) == 1
+        assert len(blocked_writes()) == 1
+
+    run_scenario(scenario, approval=ApprovedAction("message", "send"))
+
+
+def test_approved_context_allows_composer_typing():
+    async def scenario(page, hits):
+        await page.click("#composer")
+        await page.keyboard.type("hello")
+        assert (await page.inner_text("#composer")).strip() == "hello"
+
+    run_scenario(scenario, approval=ApprovedAction("message", "send"))
+
+
+def test_approved_context_allows_incidental_writes_alongside_the_one_action():
+    async def scenario(page, hits):
+        results = [await page.evaluate(POST_JS, url) for url in [READ_RECEIPT_URL, READ_RECEIPT_URL, ARCHIVE_URL, READ_RECEIPT_URL]]
+        assert results == ["ok", "ok", "ok", "ok"]
+        assert len(hits) == 4
+        assert blocked_writes() == []
+
+    run_scenario(scenario, approval=ApprovedAction("message", "archive"))
+
+
+def test_approved_context_blocks_any_second_primary_write():
+    async def scenario(page, hits):
+        results = [await page.evaluate(POST_JS, url) for url in [ARCHIVE_URL, WRITE_URL, ARCHIVE_URL]]
+        assert results == ["ok", "failed", "failed"]
+        assert hits == [f"POST {ARCHIVE_URL}"]
+        assert len(blocked_writes()) == 2
+
+    run_scenario(scenario, approval=ApprovedAction("message", "archive"))
+
+
+def test_approved_send_context_still_refuses_destructive_clicks():
+    async def scenario(page, hits):
+        for selector in ["#delete", "#report"]:
+            assert await safe_click(await page.query_selector(selector)) is False
+        assert await safe_click(await page.query_selector("#delete"), approval=ApprovedAction("message", "send")) is False
+        assert await page.evaluate("window.__sendCount") == 0
+        assert hits == []
+
+    run_scenario(scenario, approval=ApprovedAction("message", "send"))
+
+
+def test_invitation_approval_keeps_messaging_fully_guarded():
+    async def scenario(page, hits):
+        assert await page.evaluate(POST_JS, WRITE_URL) == "failed"
+        await page.click("#composer")
+        await page.keyboard.type("hello")
+        assert (await page.inner_text("#composer")).strip() == ""
+        assert hits == []
+
+    run_scenario(scenario, approval=ApprovedAction("invitation", "accept"))

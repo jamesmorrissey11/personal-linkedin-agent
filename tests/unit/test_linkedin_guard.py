@@ -1,7 +1,7 @@
 import pytest
 
 import linkedin_guard
-from linkedin_guard import ApprovedAction, blocked_write_summary, blocked_writes, describe_destructive_match, is_messaging_write, reset_blocked_writes, safe_click
+from linkedin_guard import ApprovedAction, approval_permits, blocked_write_summary, blocked_writes, describe_destructive_match, is_messaging_write, reset_blocked_writes, safe_click
 
 
 @pytest.fixture(autouse=True)
@@ -88,15 +88,107 @@ def test_safe_click_refuses_destructive_elements_without_approval():
     assert "blocked" in blocked_write_summary()
 
 
-def test_message_scope_approval_never_unlocks_destructive_clicks():
-    element = FakeElement(ariaLabel="Send")
+def test_message_send_approval_unlocks_only_send():
+    approval = ApprovedAction("message", "send")
+    send = FakeElement(ariaLabel="Send")
+    delete = FakeElement(ariaLabel="Delete conversation")
 
-    assert run(safe_click(element, approval=ApprovedAction("message", "send"))) is False
-    assert element.clicks == 0
+    assert run(safe_click(send, approval=approval)) is True
+    assert run(safe_click(delete, approval=approval)) is False
+    assert send.clicks == 1
+    assert delete.clicks == 0
+
+
+def test_message_archive_approval_unlocks_only_archive():
+    approval = ApprovedAction("message", "archive")
+    archive = FakeElement(text="Archive")
+    send = FakeElement(ariaLabel="Send")
+    delete = FakeElement(ariaLabel="Delete conversation")
+
+    assert run(safe_click(archive, approval=approval)) is True
+    assert run(safe_click(send, approval=approval)) is False
+    assert run(safe_click(delete, approval=approval)) is False
+    assert (archive.clicks, send.clicks, delete.clicks) == (1, 0, 0)
+
+
+@pytest.mark.parametrize("matched", ["delete", "report", "block", "leave", "spam", "recall", "reply", "unsend"])
+@pytest.mark.parametrize("label", ["send", "archive"])
+def test_message_approval_never_permits_other_destructive_controls(label, matched):
+    assert approval_permits(ApprovedAction("message", label), matched) is False
+
+
+def test_approval_permits_rules():
+    assert approval_permits(None, "send") is False
+    assert approval_permits(ApprovedAction("invitation", "accept"), "send") is True
+    assert approval_permits(ApprovedAction("message", "send"), "send") is True
+    assert approval_permits(ApprovedAction("message", "archive"), "archive") is True
+
+
+@pytest.mark.parametrize("scope,label", [("message", "delete"), ("message", "accept"), ("profile", "send")])
+def test_invalid_approvals_are_rejected(scope, label):
+    with pytest.raises(ValueError):
+        ApprovedAction(scope, label)
 
 
 def test_summary_is_none_when_nothing_blocked():
     assert blocked_write_summary() is None
+
+
+class FakeRequest:
+    def __init__(self, method, url):
+        self.method = method
+        self.url = url
+
+
+class FakeRoute:
+    def __init__(self, method, url):
+        self.request = FakeRequest(method, url)
+        self.outcome = None
+
+    async def abort(self, reason):
+        self.outcome = "aborted"
+
+    async def fallback(self):
+        self.outcome = "allowed"
+
+
+class FakeContext:
+    def __init__(self):
+        self.handler = None
+        self.init_scripts = []
+
+    async def route(self, matcher, handler):
+        self.handler = handler
+
+    async def add_init_script(self, script):
+        self.init_scripts.append(script)
+
+    def post(self, url):
+        route = FakeRoute("POST", url)
+        run(self.handler(route))
+        return route.outcome
+
+
+SEND_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage"
+
+
+def test_primary_write_allowance_is_per_context():
+    first, second = FakeContext(), FakeContext()
+    run(linkedin_guard.install_linkedin_write_guard(first, ApprovedAction("message", "send")))
+    run(linkedin_guard.install_linkedin_write_guard(second, ApprovedAction("message", "send")))
+
+    assert [first.post(SEND_URL), first.post(SEND_URL)] == ["allowed", "aborted"]
+    assert second.post(SEND_URL) == "allowed"
+    assert first.init_scripts == [] and second.init_scripts == []
+
+
+@pytest.mark.parametrize("approval", [None, ApprovedAction("invitation", "accept")])
+def test_unapproved_contexts_block_every_messaging_write(approval):
+    context = FakeContext()
+    run(linkedin_guard.install_linkedin_write_guard(context, approval))
+
+    assert context.post(SEND_URL) == "aborted"
+    assert context.init_scripts == [linkedin_guard.COMPOSER_GUARD_SCRIPT]
 
 
 def run(coroutine):

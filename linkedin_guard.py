@@ -1,21 +1,23 @@
-"""Guards that make "no LinkedIn message is sent or deleted without explicit human approval" an invariant.
+"""Guards that make every LinkedIn write a human-approved, per-item, single-use action.
 
-Layers implemented here (see issue #41):
+Layers implemented here (see issues #41 and #46):
 1. Network kill switch: `install_linkedin_write_guard` aborts every non-GET request to a LinkedIn
    messaging endpoint on a browser context, whatever UI code or selector triggered it.
 2. Guarded UI actions: `safe_click` refuses destructive-looking targets, and the composer guard
    cancels typing/Enter inside any message composer.
 
-No message-sending capability exists. If one is ever added, approval must be per message, bound to the
-conversation URL and the SHA-256 of the exact final text shown to the human, single use, short-lived,
-and only valid in an interactive session. Any mismatch fails closed. `ApprovedAction` never authorizes
-the "message" scope today.
+Scraping and sync contexts install the guard without an approval and stay fully guarded, so reading never
+marks anything read. An action context opened for one item James approved in Agent Inbox passes an
+`ApprovedAction`: a "message" approval lifts the composer guard, allows the incidental messaging writes
+(read receipts, presence), allows exactly one primary write (send or archive) per context, and unlocks
+only the approved control in `safe_click`. The LLM agents never act; only a human approval does.
 """
 
 import logging
 import re
 import time
 from dataclasses import dataclass, field
+from typing import Literal
 from urllib.parse import urlparse
 
 logger = logging.getLogger("linkedin_guard")
@@ -25,6 +27,8 @@ MESSAGING_PATH_PATTERN = re.compile(r"messag|messenger|conversation", re.IGNOREC
 DESTRUCTIVE_PATTERN = re.compile(r"(?<![a-z])(send|reply|delete|archive|report|block|leave|spam|recall|unsend)(?![a-z])", re.IGNORECASE)
 INTERACTIVE_TAGS = {"button", "a", "input"}
 MAX_TEXT_LENGTH_CHECKED = 40
+PRIMARY_WRITE_PATTERN = re.compile(r"createMessage|archive", re.I)
+MESSAGE_APPROVAL_LABELS = {"send", "archive"}
 
 # JS run on an element to collect everything that describes what it does (never the content of message cards).
 ELEMENT_DESCRIPTOR_JS = """el => {
@@ -76,12 +80,18 @@ class BlockedLinkedInWrite:
         return f"[{self.layer}] {self.detail}"
 
 
-@dataclass
+@dataclass(frozen=True)
 class ApprovedAction:
-    """A human approval for a guarded UI action. Message writes are never authorizable."""
+    """A human approval for one action on one item. For "message", `label` is "send" or "archive"."""
 
-    scope: str  # only "invitation" is honored
+    scope: Literal["invitation", "message"]
     label: str
+
+    def __post_init__(self) -> None:
+        if self.scope not in ("invitation", "message"):
+            raise ValueError(f"Unknown approval scope: {self.scope!r}")
+        if self.scope == "message" and self.label not in MESSAGE_APPROVAL_LABELS:
+            raise ValueError(f"Message approvals only cover {sorted(MESSAGE_APPROVAL_LABELS)}, not {self.label!r}")
 
 
 _blocked: list[BlockedLinkedInWrite] = []
@@ -131,10 +141,31 @@ async def _guard_route(route) -> None:
         await route.fallback()
 
 
-async def install_linkedin_write_guard(context) -> None:
-    """Install the network kill switch and composer-input guard on a Playwright browser context."""
-    await context.route(is_messaging_url, _guard_route)
-    await context.add_init_script(COMPOSER_GUARD_SCRIPT)
+async def install_linkedin_write_guard(context, approval: ApprovedAction | None = None) -> None:
+    """Install the network kill switch and composer-input guard on a Playwright browser context.
+
+    With a "message" approval, messaging writes are allowed except that only one primary write (send or
+    archive) may pass per context; the composer guard is not installed.
+    """
+    if approval is None or approval.scope != "message":
+        await context.route(is_messaging_url, _guard_route)
+        await context.add_init_script(COMPOSER_GUARD_SCRIPT)
+        return
+
+    primary_writes = 0
+
+    async def approved_route(route) -> None:
+        nonlocal primary_writes
+        request = route.request
+        if is_messaging_write(request.method, request.url) and PRIMARY_WRITE_PATTERN.search(request.url):
+            if primary_writes >= 1:
+                record_blocked("network", f"second primary write under {approval}: {request.method} {request.url}")
+                await route.abort("blockedbyclient")
+                return
+            primary_writes += 1
+        await route.fallback()
+
+    await context.route(is_messaging_url, approved_route)
 
 
 def describe_destructive_match(descriptor: dict) -> str | None:
@@ -151,15 +182,19 @@ def describe_destructive_match(descriptor: dict) -> str | None:
     return None
 
 
-def approval_permits(approval: ApprovedAction | None) -> bool:
-    return approval is not None and approval.scope == "invitation"
+def approval_permits(approval: ApprovedAction | None, matched: str) -> bool:
+    if approval is None:
+        return False
+    if approval.scope == "invitation":
+        return True
+    return approval.scope == "message" and approval.label in MESSAGE_APPROVAL_LABELS and matched == approval.label
 
 
 async def safe_click(element, *, approval: ApprovedAction | None = None) -> bool:
     """Click `element` unless it looks like a destructive messaging control; returns False when refused."""
     descriptor = await element.evaluate(ELEMENT_DESCRIPTOR_JS)
     matched = describe_destructive_match(descriptor)
-    if matched and not approval_permits(approval):
+    if matched and not approval_permits(approval, matched):
         record_blocked("ui", f"refused click on '{matched}' control: {descriptor}")
         return False
     await element.click()
