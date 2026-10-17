@@ -1,4 +1,4 @@
-# [Project Name]
+# Personal LinkedIn Agent
 
 > **Universal agent entry point.** Any agent reading this repository cold starts here.
 > This file is both orientation reference and onboarding orchestrator.
@@ -23,13 +23,12 @@ This repository is built on the **Agentic-Agile Template** — a starter framewo
 | `STYLE.md` | Code conventions, commit message format, PR structure, documentation standards. |
 | `CONTRIBUTING.md` | Human contribution workflow and PR guidelines. |
 | `SECURITY.md` | Security policy and vulnerability reporting process. |
-| `mcp.json` | Example MCP server configuration for agent tooling. |
 | `platform-adapters/` | **Layered agent / tracker / CI-CD context.** Three sub-layers: `agent-tools/` (one adapter per AI agent), `issue-trackers/` (one per backlog system), `ci-cd/` (planned v2), plus `combos/` for pre-assembled stacks. |
-| `docs/agent-surface-selection.md` | Guide to choosing the right agent surface for different task types. |
-| `docs/evaluation-framework.md` | Eight-dimension framework for measuring human-agent partnership effectiveness. |
-| `docs/epic-decomposition-example.md` | Worked example: decompose an epic into stories, assign file ownership, plan waves. |
-| `docs/history/` | Implementation plan and design history (Phase 1/Phase 2 multi-platform generalization). |
+| `docs/agentic-agile/agent-surface-selection.md` | Guide to choosing the right agent surface for different task types. |
+| `docs/agentic-agile/evaluation-framework.md` | Eight-dimension framework for measuring human-agent partnership effectiveness. |
+| `docs/agentic-agile/epic-decomposition-example.md` | Worked example: decompose an epic into stories, assign file ownership, plan waves. |
 | `.github/copilot-instructions.md` | GitHub Copilot-specific instruction file. |
+| `.github/instructions/` | Path-scoped rules (Python, infra, Markdown). |
 | `.github/ISSUE_TEMPLATE/agentic-story.md` | Structured story template with scope, file ownership, and acceptance criteria. |
 
 ---

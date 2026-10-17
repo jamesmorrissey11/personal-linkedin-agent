@@ -1,6 +1,6 @@
 # Style Guide
 
-> Customize this guide for your project's conventions. Each section includes placeholder content and examples to adapt.
+> Conventions for Personal LinkedIn Agent. Path-specific rules live in `.github/instructions/`.
 
 ---
 
@@ -8,37 +8,35 @@
 
 ### Language-Specific Conventions
 
-<!-- Replace with your project's language and conventions. -->
 
-**Primary language:** [e.g., TypeScript, Python, Go, Rust]
+
+**Primary language:** Python (>=3.10)
 
 | Convention | Rule |
 |-----------|------|
-| Indentation | [e.g., 2 spaces for JS/TS, 4 spaces for Python, tabs for Go] |
-| Line length | [e.g., 100 characters] |
-| Semicolons | [e.g., required / omitted] |
-| Quotes | [e.g., single quotes for strings] |
-| Trailing commas | [e.g., always in multiline] |
+| Indentation | 4 spaces |
+| Line length | Not enforced (`line-length = 1000` in `pyproject.toml`); keep lines readable |
+| Quotes | Double quotes (ruff format default) |
+| Dependencies | Managed with `uv`; run everything via `uv run` |
 
 ### Naming Conventions
 
 | Element | Convention | Example |
 |---------|-----------|---------|
-| Variables | [e.g., camelCase] | `userName` |
-| Functions | [e.g., camelCase] | `getUserById` |
-| Classes/Types | [e.g., PascalCase] | `UserService` |
-| Constants | [e.g., UPPER_SNAKE] | `MAX_RETRY_COUNT` |
-| Files | [e.g., kebab-case] | `user-service.ts` |
-| Test files | [e.g., same name + .test] | `user-service.test.ts` |
+| Variables / functions | snake_case | `get_invitations` |
+| Classes | PascalCase | `CorrectDecisionEvaluator` |
+| Constants | UPPER_SNAKE | `INVITATION_CARD_SELECTORS` |
+| Files | snake_case | `invitations_manager.py` |
+| Test files | `test_*.py` in `tests/` | `test_selectors.py` |
 
 ### Formatting Tools
 
 <!-- List the formatters and linters your project uses. -->
 
-- **Formatter:** [e.g., Prettier, Black, gofmt]
-- **Linter:** [e.g., ESLint, pylint, golangci-lint]
-- **Config files:** [e.g., `.prettierrc`, `pyproject.toml`]
-- **Run before commit:** [e.g., `npm run lint`, `make fmt`]
+- **Formatter:** ruff format
+- **Linter:** ruff
+- **Config files:** `pyproject.toml`, `.pre-commit-config.yaml`
+- **Run before commit:** `uv run ruff check --fix . && uv run ruff format .`
 
 ---
 
