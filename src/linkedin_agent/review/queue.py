@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 
 from langgraph_sdk import get_client
 
+from linkedin_agent.runtime import check_url
+
 SEARCH_PAGE_SIZE = 100
 DEFAULT_LANGGRAPH_URL = "http://localhost:2024"
 PENDING_STATUSES = {"interrupted", "busy"}
@@ -16,10 +18,20 @@ RESOLUTION_FIELDS = ("decision", "action", "reply", "outcome")
 logger = logging.getLogger("review_queue")
 
 
+def langgraph_url() -> str:
+    return os.environ.get("LANGGRAPH_URL", DEFAULT_LANGGRAPH_URL)
+
+
+def check_review_server() -> None:
+    """Fail fast, with the fix, when the LangGraph server behind Agent Inbox isn't running."""
+    url = langgraph_url()
+    check_url(f"{url.rstrip('/')}/ok", f"Can't reach the LangGraph server at {url}.", "Start it with `uv run linkedin-agent server` (or fix LANGGRAPH_URL in .env).")
+
+
 def get_review_client():
     # A local `langgraph dev` server ignores the key; a deployed one needs it.
     api_key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGSMITH_PERSONAL_ACCESS_TOKEN")
-    return get_client(url=os.environ.get("LANGGRAPH_URL", DEFAULT_LANGGRAPH_URL), api_key=api_key)
+    return get_client(url=langgraph_url(), api_key=api_key)
 
 
 async def enqueue_review(client, graph_id: str, key: str, input_data: dict) -> bool:

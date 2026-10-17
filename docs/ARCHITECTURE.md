@@ -51,6 +51,8 @@ All Python code lives in one installable package, `src/linkedin_agent/`, run thr
 
 ### Review workflow
 
+For day-to-day use see [DAILY_WORKFLOW.md](DAILY_WORKFLOW.md); for every safeguard, risk, and mitigation see [SAFETY.md](SAFETY.md).
+
 ```mermaid
 flowchart LR
     A[linkedin-agent daily<br/>or invitations/inbox] -->|read-only scrape + LLM proposal| B[review/queue.py]

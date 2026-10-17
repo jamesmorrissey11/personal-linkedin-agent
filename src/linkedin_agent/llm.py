@@ -26,6 +26,8 @@ from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
+from linkedin_agent.runtime import SetupError, check_url
+
 logger = logging.getLogger("llm")
 logger.setLevel(logging.INFO)
 
@@ -54,7 +56,7 @@ def build_ollama_model() -> OllamaModel:
     """Build the local Ollama model. Requires `ollama serve` running locally with OLLAMA_MODEL pulled."""
     return OllamaModel(
         os.environ.get("OLLAMA_MODEL", "gemma3:latest"),
-        provider=OllamaProvider(base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")),
+        provider=OllamaProvider(base_url=ollama_base_url()),
     )
 
 
@@ -62,7 +64,7 @@ def build_openai_model() -> OpenAIChatModel:
     """Build a standard OpenAI API model using OPENAI_API_KEY."""
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError("Missing required OPENAI_API_KEY for --model-backend openai. Set it in .env or choose another backend.")
+        raise SetupError("Missing required OPENAI_API_KEY for --model-backend openai.", "Set it in .env, or choose another backend with --model-backend.")
     openai_client = AsyncOpenAI(api_key=api_key)
     return OpenAIChatModel(os.environ.get("OPENAI_MODEL", "gpt-4.1-mini"), provider=OpenAIProvider(openai_client=openai_client))
 
@@ -70,7 +72,7 @@ def build_openai_model() -> OpenAIChatModel:
 def _require_env(names: list[str]) -> None:
     missing_vars = [var for var in names if not os.environ.get(var)]
     if missing_vars:
-        raise RuntimeError(f"Missing required Azure OpenAI environment variable(s) for --model-backend azure/fallback: {', '.join(missing_vars)}. Set them in .env, or use --model-backend ollama (the default) to run without Azure credentials.")
+        raise SetupError(f"Missing required Azure OpenAI environment variable(s) for --model-backend azure/fallback: {', '.join(missing_vars)}.", "Set them in .env (`azd provision` in deploy/azure writes them), or use --model-backend ollama (the default) to run without Azure credentials.")
 
 
 def _build_invitations_azure_client() -> AsyncOpenAI:
@@ -92,6 +94,18 @@ def _build_inbox_azure_client() -> AsyncOpenAI:
         return token_provider()
 
     return AsyncOpenAI(base_url=os.environ["AZURE_OPENAI_ENDPOINT"], api_key=async_token_provider)
+
+
+def ollama_base_url() -> str:
+    return os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+
+
+def check_backend(backend: str) -> None:
+    """Fail fast when the local Ollama backend isn't running. Hosted backends are checked by their settings at
+    build time, and "fallback" is left alone because it falls back to Azure when Ollama is down."""
+    if backend == "ollama":
+        url = ollama_base_url()
+        check_url(f"{url.rstrip('/')}/models", f"Ollama isn't reachable at {url}.", "Start it with `ollama serve` (and `ollama pull` the model), or choose another backend with --model-backend openai.")
 
 
 def build_azure_model(azure_variant: AzureVariant) -> OpenAIChatModel:

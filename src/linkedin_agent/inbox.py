@@ -17,10 +17,10 @@ from linkedin_agent.linkedin.guard import safe_click
 from linkedin_agent.linkedin.models import InboxMessage, MessageRanking
 from linkedin_agent.linkedin.pages import extract_conversation_messages, get_logged_in_user_name, is_linkedin_conversation_url, latest_message_is_from_user
 from linkedin_agent.linkedin.session import open_linkedin
-from linkedin_agent.llm import build_model, default_model_backend, model_settings
+from linkedin_agent.llm import build_model, check_backend, default_model_backend, model_settings
 from linkedin_agent.review.graphs import MESSAGE_GRAPH_ID
-from linkedin_agent.review.queue import classify_review, enqueue_review, fetch_pending_reviews, find_pending_review, get_review_client, supersede_review
-from linkedin_agent.runtime import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts
+from linkedin_agent.review.queue import check_review_server, classify_review, enqueue_review, fetch_pending_reviews, find_pending_review, get_review_client, supersede_review
+from linkedin_agent.runtime import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts, next_step
 
 logger = logging.getLogger("inbox_manager")
 logger.setLevel(logging.INFO)
@@ -309,6 +309,8 @@ async def manage_linkedin_inbox(
         counts.cap_hit = cap_hit
         logger.info("\n=== LinkedIn Inbox Management Report ===")
         logger.info("Messages: %s", counts.describe())
+        if not unattended:
+            logger.info(next_step(counts, "message", "inbox"))
         for i, msg in enumerate(ranked_messages, 1):
             score = msg.ranking.urgency_score if msg.ranking else "unscored"
             logger.info(f"{i}. {msg.sender_name} - urgency {score}\n   Latest: {msg.last_three_messages[-1].content if msg.last_three_messages else ''}\n   Conversation: {msg.conversation_url}")
@@ -332,6 +334,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def run_command(args: argparse.Namespace) -> int:
-    configure(args.model_backend)
+    check_review_server()
+    backend = args.model_backend or default_model_backend()
+    configure(backend)
+    check_backend(backend)
     asyncio.run(manage_linkedin_inbox(args.num_messages, min_urgency=args.min_urgency, headless=args.headless, cleanup_only=args.cleanup_only))
     return 0

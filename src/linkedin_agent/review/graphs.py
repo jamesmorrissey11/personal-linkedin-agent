@@ -50,8 +50,29 @@ class ReviewState(TypedDict, total=False):
     outcome: str
 
 
+MAX_QUOTED_MESSAGE = 2500
+INVITATION_OUTCOMES = "**What happens:** **Accept** accepts this invitation on LinkedIn right away. **Ignore** ignores it on LinkedIn right away. The item closes once LinkedIn confirms; if it can't, it comes back here with a note."
+MESSAGE_OUTCOMES = "**What happens:** **Accept** sends the suggested reply exactly as shown. **Edit** sends your edited text instead. **Ignore** archives the conversation on LinkedIn. Each happens right away; if LinkedIn changed since this was queued (for example a new message arrived), nothing is sent and the item comes back here with a note."
+MESSAGE_OUTCOMES_NO_SUGGESTION = "**What happens:** there's no suggested reply. **Edit** sends the text you write, exactly once. **Ignore** archives the conversation on LinkedIn. Each happens right away; if LinkedIn changed since this was queued, nothing is sent and the item comes back here with a note."
+
+
+def error_banner(state: dict) -> str:
+    return f"⚠️ **Last attempt failed:** {state['last_error']}\n\n" if state.get("last_error") else ""
+
+
+def blockquote(text: str) -> str:
+    text = text.strip() or "(empty message)"
+    if len(text) > MAX_QUOTED_MESSAGE:
+        text = text[:MAX_QUOTED_MESSAGE].rstrip() + " … *(truncated; open the conversation for the rest)*"
+    return "\n".join(f"> {line}" if line.strip() else ">" for line in text.splitlines())
+
+
+def invitation_description(state: ReviewState) -> str:
+    headline = f" · {state['job_title']}" if state.get("job_title") else ""
+    return f"{error_banner(state)}**{state['name']}**{headline}\n\n**Agent's proposal:** {state.get('label') or 'see below'}\n\n{state.get('reason', 'No reasoning was recorded.')}\n\n[View profile on LinkedIn]({state['profile']})\n\n---\n\n{INVITATION_OUTCOMES}"
+
+
 def build_interrupt(state: ReviewState) -> HumanInterrupt:
-    error_prefix = f"⚠️ **Last attempt failed:** {state['last_error']}\n\n" if state.get("last_error") else ""
     return HumanInterrupt(
         action_request=ActionRequest(
             action=f"Accept invitation from {state['name']}?",
@@ -59,7 +80,7 @@ def build_interrupt(state: ReviewState) -> HumanInterrupt:
         ),
         # "Accept" accepts the invitation; "Ignore" ignores it.
         config=HumanInterruptConfig(allow_ignore=True, allow_respond=False, allow_edit=False, allow_accept=True),
-        description=f"{error_prefix}**{state.get('label') or 'Agent proposal'}**\n\n**Reason:** {state.get('reason', 'n/a')}\n\n[View profile]({state['profile']})",
+        description=invitation_description(state),
     )
 
 
@@ -136,17 +157,24 @@ class MessageReviewState(TypedDict, total=False):
     outcome: str
 
 
+def message_description(state: MessageReviewState) -> str:
+    score = state.get("urgency_score")
+    details = [f"urgency {score}/10" if score is not None else "not scored"]
+    if state.get("label"):
+        details.append(state["label"])
+    has_suggestion = bool(state.get("suggested_reply", "").strip())
+    return f"{error_banner(state)}**{state['sender_name']}** · {' · '.join(details)}\n\n**Latest message:**\n\n{blockquote(state.get('latest_message', ''))}\n\n**Why it may need a reply:** {state.get('reason', 'No reasoning was recorded.')}\n\n[Open the conversation on LinkedIn]({state['conversation_url']})\n\n---\n\n{MESSAGE_OUTCOMES if has_suggestion else MESSAGE_OUTCOMES_NO_SUGGESTION}"
+
+
 def build_message_interrupt(state: MessageReviewState) -> HumanInterrupt:
-    error_prefix = f"⚠️ **Last attempt failed:** {state['last_error']}\n\n" if state.get("last_error") else ""
-    label_line = f"**{state['label']}**\n\n" if state.get("label") else ""
     return HumanInterrupt(
         action_request=ActionRequest(
             action=f"Reply to {state['sender_name']}?",
             args={"suggested_reply": state.get("suggested_reply", "")},
         ),
-        # Accept uses the suggested reply, Edit lets you change it, Ignore dismisses the conversation.
+        # Accept uses the suggested reply, Edit lets you change it, Ignore archives the conversation.
         config=HumanInterruptConfig(allow_ignore=True, allow_respond=False, allow_edit=True, allow_accept=bool(state.get("suggested_reply", "").strip())),
-        description=(f"{error_prefix}{label_line}**Urgency:** {state.get('urgency_score', '?')}/10\n\n**Latest message:** {state.get('latest_message', '')}\n\n**Why:** {state.get('reason', 'n/a')}\n\n[Open conversation]({state['conversation_url']})"),
+        description=message_description(state),
     )
 
 
