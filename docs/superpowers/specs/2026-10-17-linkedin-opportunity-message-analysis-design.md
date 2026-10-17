@@ -36,7 +36,7 @@ The design prioritizes extraction quality and traceability over model cost and r
 - Comparing two periods, plotting multi-period trends, or generating narrative market forecasts.
 - Writing anything to LinkedIn: sending, replying, archiving, accepting invitations, or marking messages as read. Collection is strictly read-only.
 - Changing the existing human-review workflow or its live Agent Inbox actions (#46).
-- Replacing the urgency-ranking behavior in `inbox_manager.py`.
+- Replacing the urgency-ranking behavior in `linkedin_agent/inbox.py`.
 - Analyzing LinkedIn's Other inbox or non-LinkedIn sources.
 - Treating data-engineering-only roles as relevant.
 - Building a web interface, notebook, or Agent Inbox analysis view.
@@ -48,12 +48,14 @@ The design prioritizes extraction quality and traceability over model cost and r
 The new entry point will be a separate script:
 
 ```shell
-uv run python message_analyzer.py
+uv run linkedin-agent analyze
 ```
+
+(A subcommand of the package's single `linkedin-agent` CLI, after #48.)
 
 On the first run, the command will:
 
-1. Open LinkedIn through the shared read-only session, `linkedin_pages.open_linkedin`, which reuses `playwright/.auth/state.json`, holds the cross-process LinkedIn lock, and installs the write guard.
+1. Open LinkedIn through the shared read-only session, `linkedin_agent.linkedin.session.open_linkedin`, which reuses `playwright/.auth/state.json`, holds the cross-process LinkedIn lock, and installs the write guard.
 2. Open LinkedIn Messaging, select the Focused inbox, and collect conversations from the previous 30 days.
 3. Switch to the Archived folder and collect its conversations from the same window.
 4. Identify distinct recruiting opportunities and classify their relevance.
@@ -66,12 +68,12 @@ Later runs will collect messages newer than the last successful collection water
 Proposed command options:
 
 ```shell
-uv run python message_analyzer.py collect
-uv run python message_analyzer.py report
-uv run python message_analyzer.py run
-uv run python message_analyzer.py run --initial-days 30
-uv run python message_analyzer.py report --start 2026-09-01 --end 2026-09-30
-uv run python message_analyzer.py run --model-backend azure
+uv run linkedin-agent analyze collect
+uv run linkedin-agent analyze report
+uv run linkedin-agent analyze run
+uv run linkedin-agent analyze run --initial-days 30
+uv run linkedin-agent analyze report --start 2026-09-01 --end 2026-09-30
+uv run linkedin-agent analyze run --model-backend azure
 ```
 
 `run` is the default and performs collection, analysis, and report generation. `collect` only scrapes and persists raw conversation data; it does not invoke analysis agents or update the taxonomy. `report` operates only on retained structured data and therefore does not require LinkedIn or model access unless taxonomy regeneration is explicitly requested.
@@ -80,15 +82,15 @@ uv run python message_analyzer.py run --model-backend azure
 
 ### Separate End-to-End CLI
 
-`message_analyzer.py` will own this workflow rather than adding an analysis mode to `inbox_manager.py`. The existing inbox manager scans recent conversations only until it is caught up, keeps just the last three messages of each, and immediately ranks reply urgency. Longitudinal analysis requires complete opportunity context, incremental persistence, idempotent reprocessing, and report generation, which are a separate responsibility.
+An `analysis` subpackage, `src/linkedin_agent/analysis/`, exposed as the `linkedin-agent analyze` subcommand, will own this workflow rather than adding an analysis mode to `linkedin_agent/inbox.py`. It is a subpackage rather than one workflow module (the #48 default) because it has five modules (models, storage, scraper, agents and pipeline, report) and its own persistence boundary, the private SQLite store. The existing inbox manager scans recent conversations only until it is caught up, keeps just the last three messages of each, and immediately ranks reply urgency. Longitudinal analysis requires complete opportunity context, incremental persistence, idempotent reprocessing, and report generation, which are a separate responsibility.
 
-The new script will follow the established entry-point convention for logging, CLI parsing, and model setup, which each script still implements independently. LinkedIn browser access is the exception: since #46 it is shared, and the collector must use it rather than launching Playwright itself:
+It will reuse the package's shared pieces rather than reimplementing them: `cli.py` loads `.env` and sets up logging, `llm.build_model(backend, azure_variant="invitations")` builds every model, and LinkedIn browser access goes through the shared, guarded session (since #46) rather than launching Playwright itself:
 
-- `linkedin_pages.open_linkedin(headless, unattended, lock_timeout=...)` for the logged-in session, the cross-process lock, login detection, and the write guard. The collector never passes an `approval`.
-- `linkedin_guard.safe_click` for every click.
-- The read-only helpers in `linkedin_pages.py` (for example `get_logged_in_user_name` and `is_linkedin_conversation_url`) where they fit.
+- `linkedin_agent.linkedin.session.open_linkedin(headless, unattended, lock_timeout=...)` for the logged-in session, the cross-process lock, login detection, and the write guard. The collector never passes an `approval`.
+- `linkedin_agent.linkedin.guard.safe_click` for every click.
+- The read-only helpers in `linkedin_agent.linkedin.pages` (for example `get_logged_in_user_name` and `is_linkedin_conversation_url`) where they fit.
 
-It must never import `linkedin_actions`. Its Azure client setup will follow the known-working pattern in `invitations_manager.py`, not the intentionally divergent setup in `inbox_manager.py`.
+It must never import `linkedin_agent.linkedin.actions`. For Azure it uses the known-working `"invitations"` client variant in `llm.py`, not the intentionally divergent `"inbox"` variant.
 
 ### Processing Stages
 
@@ -115,7 +117,7 @@ New messages automatically mark their affected conversation and opportunities fo
 Collection must never change anything on LinkedIn. Opening a conversation normally makes LinkedIn send read receipts, delivery acknowledgements, and "mark all as seen" requests. Without protection, collecting would silently mark recruiter messages as read and clear notifications James hasn't seen.
 
 - The collector opens LinkedIn only through `open_linkedin` without an approval. That installs the write guard, which aborts every messaging write (including read receipts) and blocks typing in the message composer.
-- Every click goes through `safe_click`. The collector never types, presses keys, or calls `linkedin_actions`.
+- Every click goes through `safe_click`. The collector never types, presses keys, or calls `linkedin_agent.linkedin.actions`.
 - The LinkedIn analysis agents have no tools. They only read stored text.
 
 `open_linkedin` holds the shared LinkedIn lock for the whole session, so collection never overlaps the daily sync or an Agent Inbox action. While a collection is running, an Agent Inbox action waits up to five minutes and then returns a retryable "Another LinkedIn task is running" note. To keep that visible and short:
@@ -311,7 +313,7 @@ Repeated reports for the same date range are timestamped rather than overwritten
 - Stable-group reuse and new-group addition.
 - Report aggregation and private output location.
 - Watermarks do not advance on partial failure.
-- The write-safety architecture test (`tests/unit/test_no_message_writes.py`) scans the new `message_analysis/` package as well as root scripts, so the collector cannot click, type, or use write selectors outside the guard.
+- The write-safety architecture test (`tests/unit/test_no_message_writes.py`) already scans all of `src/linkedin_agent/` recursively, including the new `analysis/` subpackage, so the collector cannot click, type, or use write selectors outside the guard.
 
 ### Playwright Fixture Tests
 
@@ -365,14 +367,14 @@ The evaluation checks structured validity, relevance classification, opportunity
 - Equivalent labels can normalize to one canonical item.
 - Each canonical item contributes no more than one count per opportunity.
 - The report shows canonical counts, hybrid grouped counts, opportunity sources, and evidence snippets.
-- Existing `inbox_manager.py` urgency ranking and Agent Inbox behavior remain unchanged.
+- Existing `linkedin_agent/inbox.py` urgency ranking and Agent Inbox behavior remain unchanged.
 - Private raw data and generated reports are ignored by Git.
 
 ## Builder Decisions
 
 The builder may choose:
 
-- exact class and function names inside `message_analyzer.py`;
+- exact class and function names inside `src/linkedin_agent/analysis/`;
 - the initial SQLite migration mechanism, provided it is explicit and preserves data;
 - the exact Markdown table layouts;
 - timeout and retry defaults consistent with the existing project;
@@ -384,4 +386,5 @@ The builder may not replace the evidence requirement, deterministic counting, se
 
 | Date | Change |
 |---|---|
+| 2026-10-17 | Updated for #48's package layout: the workflow is the `src/linkedin_agent/analysis/` subpackage and the `linkedin-agent analyze` subcommand, and it reuses `cli.py`, `llm.py`, and the `linkedin/` session, guard, and page helpers. |
 | 2026-10-17 | Updated after #46 merged. Collection now also reads the Archived folder, because Ignore in Agent Inbox archives conversations. It must use the shared read-only session (`open_linkedin`, the write guard, and the LinkedIn lock) and never write to LinkedIn, including read receipts. |
