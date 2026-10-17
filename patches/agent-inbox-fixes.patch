@@ -108,6 +108,24 @@ index 023c0c0..2a8203a 100644
          name,
        });
  
+diff --git a/src/components/agent-inbox/components/inbox-item-input.tsx b/src/components/agent-inbox/components/inbox-item-input.tsx
+index 3768878..9670b47 100644
+--- a/src/components/agent-inbox/components/inbox-item-input.tsx
++++ b/src/components/agent-inbox/components/inbox-item-input.tsx
+@@ -44,11 +44,11 @@ function ArgsRenderer({ args }: { args: Record<string, any> }) {
+             <p className="text-sm leading-[18px] text-gray-600 text-wrap">
+               {prettifyText(k)}:
+             </p>
+-            <span className="text-[13px] leading-[18px] text-black bg-zinc-100 rounded-xl p-3 w-full max-w-full">
++            <div className="text-[13px] leading-[18px] text-black bg-zinc-100 rounded-xl p-3 w-full max-w-full">
+               <MarkdownText className="text-wrap break-all break-words whitespace-pre-wrap">
+                 {value}
+               </MarkdownText>
+-            </span>
++            </div>
+           </div>
+         );
+       })}
 diff --git a/src/components/agent-inbox/contexts/ThreadContext.tsx b/src/components/agent-inbox/contexts/ThreadContext.tsx
 index 274e783..3742d72 100644
 --- a/src/components/agent-inbox/contexts/ThreadContext.tsx
@@ -157,3 +175,196 @@ index afc4cb7..eefc182 100644
  /**
   * Determines if a URL is a deployed (cloud) URL.
   */
+diff --git a/src/components/ui/markdown-text.tsx b/src/components/ui/markdown-text.tsx
+index 903ec73..0f2e280 100644
+--- a/src/components/ui/markdown-text.tsx
++++ b/src/components/ui/markdown-text.tsx
+@@ -7,95 +7,101 @@ export interface MarkdownTextProps extends Options {
+   className?: string;
+ }
+ 
+-export function MarkdownText({ children, ...props }: MarkdownTextProps) {
++export function MarkdownText({
++  children,
++  className,
++  ...props
++}: MarkdownTextProps) {
+   return (
+-    <Markdown
+-      remarkPlugins={[remarkGfm]}
+-      rehypePlugins={[rehypeRaw]}
+-      components={{
+-        pre: ({ node: _node, ...props }) => (
+-          <pre
+-            {...props}
+-            className="my-1 rounded-lg bg-muted p-4 text-wrap break-words whitespace-pre-wrap"
+-          />
+-        ),
+-        code: ({ node: _node, ...props }) => {
+-          const isInline = !props.className;
+-          return (
+-            <code
++    <div className={className}>
++      <Markdown
++        remarkPlugins={[remarkGfm]}
++        rehypePlugins={[rehypeRaw]}
++        components={{
++          pre: ({ node: _node, ...props }) => (
++            <pre
+               {...props}
+-              className={
+-                isInline
+-                  ? "rounded bg-muted px-1.5 py-0.5 font-mono text-sm"
+-                  : "block font-mono text-sm"
+-              }
++              className="my-1 rounded-lg bg-muted p-4 text-wrap break-words whitespace-pre-wrap"
+             />
+-          );
+-        },
+-        details: ({ node: _node, ...props }) => (
+-          <details {...props} className="my-2 rounded-lg border p-4" />
+-        ),
+-        summary: ({ node: _node, ...props }) => (
+-          <summary {...props} className="cursor-pointer font-medium" />
+-        ),
+-        h1: ({ node: _node, ...props }) => (
+-          <h1
+-            {...props}
+-            className="scroll-m-20 text-4xl font-extrabold tracking-tight lg:text-5xl mb-2"
+-          />
+-        ),
+-        h2: ({ node: _node, ...props }) => (
+-          <h2
+-            {...props}
+-            className="scroll-m-20 text-3xl font-semibold tracking-tight"
+-          />
+-        ),
+-        h3: ({ node: _node, ...props }) => (
+-          <h3
+-            {...props}
+-            className="scroll-m-20 text-2xl font-semibold tracking-tight"
+-          />
+-        ),
+-        h4: ({ node: _node, ...props }) => (
+-          <h4
+-            {...props}
+-            className="scroll-m-20 text-xl font-semibold tracking-tight"
+-          />
+-        ),
+-        h5: ({ node: _node, ...props }) => (
+-          <h5
+-            {...props}
+-            className="scroll-m-20 text-lg font-semibold tracking-tight"
+-          />
+-        ),
+-        h6: ({ node: _node, ...props }) => (
+-          <h6
+-            {...props}
+-            className="scroll-m-20 text-base font-semibold tracking-tight"
+-          />
+-        ),
+-        ul: ({ node: _node, ...props }) => (
+-          <ul {...props} className="ml-6 list-disc [&>li]:mt-1" />
+-        ),
+-        ol: ({ node: _node, ...props }) => (
+-          <ol {...props} className="ml-6 list-decimal [&>li]:mt-1" />
+-        ),
+-        li: ({ node: _node, ...props }) => <li {...props} className="ml-4" />,
+-        a: ({ node: _node, className, ...props }) => (
+-          <a
+-            target="_blank"
+-            rel="noopener noreferrer"
+-            className={cn(
+-              "font-medium underline underline-offset-4 break-all",
+-              className
+-            )}
+-            {...props}
+-          />
+-        ),
+-      }}
+-      {...props}
+-    >
+-      {children}
+-    </Markdown>
++          ),
++          code: ({ node: _node, ...props }) => {
++            const isInline = !props.className;
++            return (
++              <code
++                {...props}
++                className={
++                  isInline
++                    ? "rounded bg-muted px-1.5 py-0.5 font-mono text-sm"
++                    : "block font-mono text-sm"
++                }
++              />
++            );
++          },
++          details: ({ node: _node, ...props }) => (
++            <details {...props} className="my-2 rounded-lg border p-4" />
++          ),
++          summary: ({ node: _node, ...props }) => (
++            <summary {...props} className="cursor-pointer font-medium" />
++          ),
++          h1: ({ node: _node, ...props }) => (
++            <h1
++              {...props}
++              className="scroll-m-20 text-4xl font-extrabold tracking-tight lg:text-5xl mb-2"
++            />
++          ),
++          h2: ({ node: _node, ...props }) => (
++            <h2
++              {...props}
++              className="scroll-m-20 text-3xl font-semibold tracking-tight"
++            />
++          ),
++          h3: ({ node: _node, ...props }) => (
++            <h3
++              {...props}
++              className="scroll-m-20 text-2xl font-semibold tracking-tight"
++            />
++          ),
++          h4: ({ node: _node, ...props }) => (
++            <h4
++              {...props}
++              className="scroll-m-20 text-xl font-semibold tracking-tight"
++            />
++          ),
++          h5: ({ node: _node, ...props }) => (
++            <h5
++              {...props}
++              className="scroll-m-20 text-lg font-semibold tracking-tight"
++            />
++          ),
++          h6: ({ node: _node, ...props }) => (
++            <h6
++              {...props}
++              className="scroll-m-20 text-base font-semibold tracking-tight"
++            />
++          ),
++          ul: ({ node: _node, ...props }) => (
++            <ul {...props} className="ml-6 list-disc [&>li]:mt-1" />
++          ),
++          ol: ({ node: _node, ...props }) => (
++            <ol {...props} className="ml-6 list-decimal [&>li]:mt-1" />
++          ),
++          li: ({ node: _node, ...props }) => <li {...props} className="ml-4" />,
++          a: ({ node: _node, className, ...props }) => (
++            <a
++              target="_blank"
++              rel="noopener noreferrer"
++              className={cn(
++                "font-medium underline underline-offset-4 break-all",
++                className
++              )}
++              {...props}
++            />
++          ),
++        }}
++        {...props}
++      >
++        {children}
++      </Markdown>
++    </div>
+   );
+ }
