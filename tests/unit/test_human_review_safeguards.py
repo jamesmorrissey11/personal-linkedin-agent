@@ -14,6 +14,9 @@ class FakeButton:
     def __init__(self):
         self.clicks = 0
 
+    async def evaluate(self, script):
+        return {"tag": "button", "interactive": True, "ariaLabel": "Accept", "title": "", "name": "", "id": "", "type": "", "controlName": "", "className": "", "text": "Accept"}
+
     async def click(self):
         self.clicks += 1
 

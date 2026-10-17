@@ -228,6 +228,18 @@ Newsletter invitations are left pending because the current scraper cannot relia
 
 Environment variables (read from the environment or `.env`, never logged): `LANGGRAPH_URL` (default `http://localhost:2024`) and `LANGSMITH_API_KEY` (falls back to `LANGSMITH_PERSONAL_ACCESS_TOKEN`; a local `langgraph dev` server doesn't check it).
 
+## No message is sent or deleted without human approval
+
+This project never sends, deletes, archives, reports, blocks, or leaves a LinkedIn conversation. `linkedin_guard.py` enforces that in layers so a code change, selector drift, prompt injection, or an unattended run cannot do it either:
+
+1. **Network kill switch:** every Playwright context aborts and logs any non-GET request to a LinkedIn messaging endpoint.
+2. **Guarded UI:** managers click through `safe_click`, which refuses send/delete/archive/report/block/leave/spam/recall controls, and message composers cancel all typing and Enter.
+3. **No LLM actuators:** the agents have no tools; message text is passed as quoted untrusted data.
+4. **CI architecture tests** (`tests/unit/test_no_message_writes.py`) fail on composer/send selectors, `press`/`type`/`fill`, or clicks that bypass `safe_click`.
+5. **Unattended runs** hit the same guards; blocked attempts are logged and added to the daily summary notification.
+
+If sending is ever added, approval must be per message, bound to the conversation URL and the SHA-256 of the exact final text shown to the human, single use, short-lived, and valid only in an interactive session. Any mismatch fails closed.
+
 ## Daily unattended workflow
 
 `daily_run.py` runs everything in order so Agent Inbox shows only new, still-unhandled items: (1) apply decisions you made in the inbox, (2) close confirmed-stale items, (3) propose new items, (4) post a summary notification. The rule is **fail open**: when unsure, an item is queued rather than hidden.

@@ -25,6 +25,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from rich.logging import RichHandler
 
+from linkedin_guard import ApprovedAction, blocked_write_summary, install_linkedin_write_guard, safe_click
 from review_graph import GRAPH_ID
 from review_queue import classify_review, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_review, get_review_client, mark_applied, supersede_review
 from unattended import KNOWN_STREAK_STOP, HealthCheckError, LoginRequiredError, ReviewCounts
@@ -349,15 +350,13 @@ async def execute_approved_action(card: ElementHandle, decision: ApprovedInvitat
     if decision.action == InvitationAction.ACCEPT:
         accept_button = await card.query_selector("button[aria-label*='Accept']")
         if accept_button:
-            await accept_button.click()
-            return True
+            return await safe_click(accept_button, approval=ApprovedAction("invitation", "accept"))
         else:
             logger.warning("Accept button not found on the card.")
     elif decision.action == InvitationAction.IGNORE:
         ignore_button = await card.query_selector("button[aria-label*='Ignore']")
         if ignore_button:
-            await ignore_button.click()
-            return True
+            return await safe_click(ignore_button, approval=ApprovedAction("invitation", "ignore"))
         else:
             logger.warning("Ignore button not found on the card.")
     return False
@@ -395,6 +394,7 @@ async def linkedin_session(headless: bool, unattended: bool):
         browser = await p.chromium.launch(headless=headless)
         try:
             context = await browser.new_context(storage_state="playwright/.auth/state.json")
+            await install_linkedin_write_guard(context)
             page = await context.new_page()
             await page.goto("https://www.linkedin.com/feed")
             if not page.url.startswith("https://www.linkedin.com/feed"):
@@ -407,6 +407,8 @@ async def linkedin_session(headless: bool, unattended: bool):
                 await context.storage_state(path="playwright/.auth/state.json")
             yield context, page
         finally:
+            if summary := blocked_write_summary():
+                logger.warning(summary)
             await browser.close()
 
 
