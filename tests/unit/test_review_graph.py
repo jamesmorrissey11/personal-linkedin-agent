@@ -3,9 +3,9 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
-import review_graph
-from linkedin_actions import ActionResult
-from review_graph import MessageReviewState, ReviewState, build_interrupt, build_message_interrupt, builder, decision_from_response, message_builder, message_result_from_response
+from linkedin_agent.linkedin.actions import ActionResult
+from linkedin_agent.review import graphs
+from linkedin_agent.review.graphs import MessageReviewState, ReviewState, build_interrupt, build_message_interrupt, builder, decision_from_response, message_builder, message_result_from_response
 from tests.async_helpers import run_async_test
 
 STATE: ReviewState = {"name": "Ada", "profile": "https://www.linkedin.com/in/ada/", "job_title": "Engineer", "reason": "Unclear role"}
@@ -33,7 +33,7 @@ def test_graph_interrupts_then_resumes_with_action(response_type, monkeypatch):
         return ActionResult("accepted" if decision == "accept" else "ignored")
 
     patch_graph_dependencies(monkeypatch)
-    monkeypatch.setattr(review_graph, "perform_invitation_action", fake_action)
+    monkeypatch.setattr(graphs, "perform_invitation_action", fake_action)
 
     async def scenario():
         graph = builder.compile(checkpointer=MemorySaver())
@@ -88,7 +88,7 @@ def test_message_reply_passes_exact_edited_text(monkeypatch):
         return ActionResult("sent")
 
     patch_graph_dependencies(monkeypatch)
-    monkeypatch.setattr(review_graph, "perform_message_action", fake_action)
+    monkeypatch.setattr(graphs, "perform_message_action", fake_action)
 
     async def scenario():
         graph = message_builder.compile(checkpointer=MemorySaver())
@@ -112,7 +112,7 @@ def test_failure_loops_back_to_interrupt_with_note(monkeypatch):
     async def fake_action(_profile, _decision):
         return results.pop(0)
 
-    monkeypatch.setattr(review_graph, "perform_invitation_action", fake_action)
+    monkeypatch.setattr(graphs, "perform_invitation_action", fake_action)
 
     async def scenario():
         graph = builder.compile(checkpointer=MemorySaver())
@@ -134,7 +134,7 @@ def test_superseded_never_calls_action(monkeypatch):
     async def unexpected_action(*_args):
         raise AssertionError("superseded must not act")
 
-    monkeypatch.setattr(review_graph, "perform_invitation_action", unexpected_action)
+    monkeypatch.setattr(graphs, "perform_invitation_action", unexpected_action)
 
     async def scenario():
         graph = builder.compile(checkpointer=MemorySaver())
@@ -155,7 +155,7 @@ def patch_graph_dependencies(monkeypatch):
     async def fake_notify_async(title, message):
         notifications.append((title, message))
 
-    monkeypatch.setattr(review_graph, "get_review_client", lambda: object())
-    monkeypatch.setattr(review_graph, "recover_stuck_reviews", fake_recover)
-    monkeypatch.setattr(review_graph, "notify_async", fake_notify_async)
+    monkeypatch.setattr(graphs, "get_review_client", lambda: object())
+    monkeypatch.setattr(graphs, "recover_stuck_reviews", fake_recover)
+    monkeypatch.setattr(graphs, "notify_async", fake_notify_async)
     return notifications

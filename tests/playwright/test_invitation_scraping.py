@@ -1,4 +1,4 @@
-"""Tests for the invitation-card scraping selectors used by invitations_manager.py.
+"""Tests for the invitation-card scraping selectors used by invitations.py.
 
 Loads a static fixture (tests/playwright/fixtures/invitation_manager.html) instead of a live
 LinkedIn session, and exercises the same selector strings the production code uses.
@@ -7,8 +7,8 @@ LinkedIn session, and exercises the same selector strings the production code us
 from playwright.async_api import async_playwright
 from playwright.sync_api import Page
 
-from invitations_manager import INVITATION_CARD_SELECTORS
-from linkedin_actions import click_invitation_button
+from linkedin_agent.linkedin.actions import click_invitation_button
+from linkedin_agent.linkedin.pages import INVITATION_CARD_SELECTORS
 from tests.async_helpers import run_async_test
 from tests.playwright.helpers import fixture_url
 

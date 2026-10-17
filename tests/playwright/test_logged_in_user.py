@@ -1,6 +1,6 @@
-"""Tests for logged-in-user detection in linkedin_pages.get_logged_in_user_name.
+"""Tests for logged-in-user detection in linkedin.pages.get_logged_in_user_name.
 
-Getting this wrong is not cosmetic. inbox_manager compares the name against each conversation's
+Getting this wrong is not cosmetic. inbox compares the name against each conversation's
 latest author, so a wrong or unknown name mislabels who spoke last: returning "Unknown User" queues
 every conversation for review (including ones the user already replied to), and returning a
 *participant's* name would hide conversations that genuinely need a reply.
@@ -11,7 +11,7 @@ is ever used.
 
 from playwright.async_api import async_playwright
 
-from linkedin_pages import get_logged_in_user_name
+from linkedin_agent.linkedin.pages import get_logged_in_user_name
 from tests.async_helpers import run_async_test
 from tests.playwright.helpers import FIXTURES_DIR
 

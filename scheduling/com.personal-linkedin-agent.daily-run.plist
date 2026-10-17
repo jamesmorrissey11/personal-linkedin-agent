@@ -15,8 +15,8 @@
     <array>
         <string>__UV__</string>
         <string>run</string>
-        <string>python</string>
-        <string>daily_run.py</string>
+        <string>linkedin-agent</string>
+        <string>daily</string>
         <string>--headless</string>
     </array>
     <key>StartCalendarInterval</key>

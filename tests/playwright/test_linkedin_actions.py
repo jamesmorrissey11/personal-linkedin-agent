@@ -4,10 +4,10 @@ from contextlib import asynccontextmanager
 import pytest
 from playwright.async_api import async_playwright
 
-import linkedin_actions
-from linkedin_actions import ARCHIVE_MENU_ITEM_SELECTORS, ARCHIVED_INDICATOR_SELECTORS, COMPOSER_SELECTORS, CONVERSATION_MENU_SELECTORS, SEND_BUTTON_SELECTORS, _composer_text, archive_conversation, conversation_is_archived, send_reply
-from linkedin_guard import ApprovedAction, install_linkedin_write_guard
-from linkedin_pages import page_reports_no_invitations
+from linkedin_agent.linkedin import actions
+from linkedin_agent.linkedin.actions import ARCHIVE_MENU_ITEM_SELECTORS, ARCHIVED_INDICATOR_SELECTORS, COMPOSER_SELECTORS, CONVERSATION_MENU_SELECTORS, SEND_BUTTON_SELECTORS, _composer_text, archive_conversation, conversation_is_archived, send_reply
+from linkedin_agent.linkedin.guard import ApprovedAction, install_linkedin_write_guard
+from linkedin_agent.linkedin.pages import page_reports_no_invitations
 from tests.async_helpers import run_async_test
 from tests.playwright.helpers import FIXTURES_DIR
 
@@ -229,10 +229,10 @@ def run_message_action(monkeypatch, action, reply, expected_latest, latest_on_pa
     async def fake_user_name(_page):
         return "James Morrissey"
 
-    monkeypatch.setattr(linkedin_actions, "open_linkedin", fake_open_linkedin)
-    monkeypatch.setattr(linkedin_actions, "get_logged_in_user_name", fake_user_name)
-    monkeypatch.setattr(linkedin_actions, "WRITE_CONFIRM_TIMEOUT_MS", 2000)
-    result = run_async_test(lambda: linkedin_actions.perform_message_action(PAGE_URL, action, reply, expected_latest))
+    monkeypatch.setattr(actions, "open_linkedin", fake_open_linkedin)
+    monkeypatch.setattr(actions, "get_logged_in_user_name", fake_user_name)
+    monkeypatch.setattr(actions, "WRITE_CONFIRM_TIMEOUT_MS", 2000)
+    result = run_async_test(lambda: actions.perform_message_action(PAGE_URL, action, reply, expected_latest))
     return result, hits
 
 
@@ -259,17 +259,17 @@ def test_new_incoming_message_stops_the_action(monkeypatch):
     result, hits = run_message_action(monkeypatch, "dismiss", "", QUEUED, "Following up on my last note")
 
     assert result.outcome is None
-    assert result.error == linkedin_actions.NEW_MESSAGE_NOTE
+    assert result.error == actions.NEW_MESSAGE_NOTE
     assert hits == []
 
 
 def test_conversation_that_never_loads_reports_a_retryable_note(monkeypatch):
-    monkeypatch.setattr(linkedin_actions, "CONVERSATION_LOAD_TIMEOUT_MS", 300)
+    monkeypatch.setattr(actions, "CONVERSATION_LOAD_TIMEOUT_MS", 300)
 
     result, hits = run_message_action(monkeypatch, "dismiss", "", QUEUED, QUEUED)
 
     assert result.outcome is None
-    assert result.error == linkedin_actions.CONVERSATION_NOT_LOADED_NOTE
+    assert result.error == actions.CONVERSATION_NOT_LOADED_NOTE
     assert hits == []
 
 
@@ -345,7 +345,7 @@ def run_invitation_action(monkeypatch, decision, server):
                 if server == "applied":
                     state["pending"] = False
                 await route.fulfill(status=200, body=SDUI_ERROR if server == "rejected" else SDUI_OK)
-            elif request.method == "GET" and request.url == linkedin_actions.INVITATION_MANAGER_URL:
+            elif request.method == "GET" and request.url == actions.INVITATION_MANAGER_URL:
                 await route.fulfill(status=200, content_type="text/html", body=invitation_manager_html(state["pending"]))
             else:
                 await route.fulfill(status=200, body="{}")
@@ -360,10 +360,10 @@ def run_invitation_action(monkeypatch, decision, server):
             finally:
                 await browser.close()
 
-    monkeypatch.setattr(linkedin_actions, "open_linkedin", fake_open_linkedin)
-    monkeypatch.setattr(linkedin_actions, "INVITATION_LIST_SETTLE_MS", 200)
-    monkeypatch.setattr(linkedin_actions, "WRITE_CONFIRM_TIMEOUT_MS", 2000)
-    result = run_async_test(lambda: linkedin_actions.perform_invitation_action(SAM_PROFILE, decision))
+    monkeypatch.setattr(actions, "open_linkedin", fake_open_linkedin)
+    monkeypatch.setattr(actions, "INVITATION_LIST_SETTLE_MS", 200)
+    monkeypatch.setattr(actions, "WRITE_CONFIRM_TIMEOUT_MS", 2000)
+    result = run_async_test(lambda: actions.perform_invitation_action(SAM_PROFILE, decision))
     return result, state
 
 

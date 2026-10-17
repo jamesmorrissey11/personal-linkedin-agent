@@ -1,143 +1,42 @@
+"""Inbox workflow: score reply urgency for conversations where someone else spoke last and queue them for review.
+
+Never writes to LinkedIn. A human decides each conversation in Agent Inbox, and the review graph acts on it.
+"""
+
+import argparse
 import asyncio
 import hashlib
 import logging
-import os
 
-import azure.identity
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
 from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-from pydantic import BaseModel
 from pydantic_ai import Agent, NativeOutput
-from pydantic_ai.models.fallback import FallbackModel
-from pydantic_ai.models.ollama import OllamaModel
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.ollama import OllamaProvider
-from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.settings import ModelSettings
-from rich.logging import RichHandler
 
-from linkedin_actions import conversation_is_archived
-from linkedin_guard import safe_click
-from linkedin_pages import (  # noqa: F401  (unused names are re-exported for existing callers)
-    UNKNOWN_AUTHORS,
-    ConversationMessage,
-    extract_conversation_messages,
-    get_logged_in_user_name,
-    is_linkedin_conversation_url,
-    latest_message_is_from_user,
-    open_linkedin,
-)
-from review_graph import MESSAGE_GRAPH_ID
-from review_queue import classify_review, enqueue_review, fetch_pending_reviews, find_pending_review, get_review_client, supersede_review
-from unattended import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts
+from linkedin_agent.linkedin.actions import conversation_is_archived
+from linkedin_agent.linkedin.guard import safe_click
+from linkedin_agent.linkedin.models import InboxMessage, MessageRanking
+from linkedin_agent.linkedin.pages import extract_conversation_messages, get_logged_in_user_name, is_linkedin_conversation_url, latest_message_is_from_user
+from linkedin_agent.linkedin.session import open_linkedin
+from linkedin_agent.llm import build_model, default_model_backend, model_settings
+from linkedin_agent.review.graphs import MESSAGE_GRAPH_ID
+from linkedin_agent.review.queue import classify_review, enqueue_review, fetch_pending_reviews, find_pending_review, get_review_client, supersede_review
+from linkedin_agent.runtime import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts
 
-# Setup logging with rich
-logging.basicConfig(level=logging.WARNING, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(show_level=True)])
 logger = logging.getLogger("inbox_manager")
 logger.setLevel(logging.INFO)
 
-load_dotenv()
-
-# Model backend selection: "ollama" (default), "openai", "azure", or "fallback" (try Ollama first,
-# fall back to Azure OpenAI on failure). Override via MODEL_BACKEND env var or the --model-backend
-# CLI flag.
-MODEL_BACKEND = os.environ.get("MODEL_BACKEND", "ollama")
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:latest")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
-
-# Bound every LLM call so a small local model stuck generating (Ollama runs with --context-shift, so it
-# never hits the context limit) can't stall the run. The OpenAI SDK retries timeouts twice, so the
-# worst case per call is roughly 3x LLM_TIMEOUT_SECONDS.
-LLM_MODEL_SETTINGS = ModelSettings(
-    max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "512")),
-    timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "60")),
-)
+_model = None
 
 
-def build_ollama_model() -> OllamaModel:
-    """Build the local Ollama model. Requires `ollama serve` running locally with OLLAMA_MODEL pulled."""
-    return OllamaModel(OLLAMA_MODEL, provider=OllamaProvider(base_url=OLLAMA_BASE_URL))
+def configure(backend: str | None = None):
+    """Build the ranking model for `backend` (default: MODEL_BACKEND). CLI commands call this at startup so a misconfigured backend fails fast."""
+    global _model
+    _model = build_model(backend or default_model_backend(), azure_variant="inbox")
+    return _model
 
 
-def build_openai_model() -> OpenAIChatModel:
-    """Build a standard OpenAI API model using OPENAI_API_KEY."""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("Missing required OPENAI_API_KEY for --model-backend openai. Set it in .env or choose another backend.")
-    openai_client = AsyncOpenAI(api_key=api_key)
-    return OpenAIChatModel(OPENAI_MODEL, provider=OpenAIProvider(openai_client=openai_client))
-
-
-def build_azure_model() -> OpenAIChatModel:
-    """Build the Azure OpenAI model using this script's existing client-setup pattern.
-
-    Note: this diverges from `invitations_manager.py`'s Azure client setup (base URL suffix, sync vs.
-    async credential) — see `.github/instructions/python.instructions.md`. Left as-is intentionally;
-    not fixed as part of adding local-model support.
-    """
-    required_vars = ["AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_CHAT_DEPLOYMENT"]
-    missing_vars = [var for var in required_vars if not os.environ.get(var)]
-    if missing_vars:
-        raise RuntimeError(f"Missing required Azure OpenAI environment variable(s) for --model-backend azure/fallback: {', '.join(missing_vars)}. Set them in .env, or use --model-backend ollama (the default) to run without Azure credentials.")
-    token_provider = azure.identity.get_bearer_token_provider(
-        azure.identity.DefaultAzureCredential(),
-        "https://cognitiveservices.azure.com/.default",
-    )
-
-    async def async_token_provider() -> str:
-        # AsyncOpenAI expects an async callable for `api_key`, but `get_bearer_token_provider` returns a
-        # sync one here (this script intentionally uses a sync `azure.identity` credential, unlike
-        # `invitations_manager.py` - see `.github/instructions/python.instructions.md`). Wrap it rather
-        # than switching credential types.
-        return token_provider()
-
-    azure_client = AsyncOpenAI(
-        base_url=os.environ["AZURE_OPENAI_ENDPOINT"],
-        api_key=async_token_provider,
-    )
-    return OpenAIChatModel(os.environ["AZURE_OPENAI_CHAT_DEPLOYMENT"], provider=OpenAIProvider(openai_client=azure_client))
-
-
-def build_model(backend: str):
-    """Build the Pydantic AI model for the given backend.
-
-    OpenAI and Azure credentials are read only when their corresponding backend is selected. Note that
-    "fallback" constructs the Azure model eagerly (FallbackModel requires both models up front), so
-    Azure credentials must still be present at startup even though Ollama is tried first at request time.
-    """
-    if backend == "ollama":
-        chosen_model = build_ollama_model()
-    elif backend == "openai":
-        chosen_model = build_openai_model()
-    elif backend == "azure":
-        chosen_model = build_azure_model()
-    elif backend == "fallback":
-        chosen_model = FallbackModel(build_ollama_model(), build_azure_model())
-    else:
-        raise ValueError(f"Unknown model backend: {backend!r}. Expected 'ollama', 'openai', 'azure', or 'fallback'.")
-    logger.info("Using model backend=%s (model_name=%s)", backend, chosen_model.model_name)
-    return chosen_model
-
-
-model = build_model(MODEL_BACKEND)
-
-
-class MessageRanking(BaseModel):
-    reason: str
-    urgency_score: int  # 1-10 scale
-    suggested_reply: str
-
-
-class InboxMessage(BaseModel):
-    sender_name: str
-    last_three_messages: list[ConversationMessage]
-    conversation_url: str
-    ranking: MessageRanking | None = None
-    known: str | None = None  # run-report bucket when an existing review already covers this message
-    from_user: bool = False  # True only when the latest message's author exactly matches the logged-in user
+def get_model():
+    return _model or configure()
 
 
 def create_message_ranking_agent(logged_in_user: str):
@@ -161,10 +60,10 @@ For each message, provide:
 """
 
     return Agent(
-        model,
+        get_model(),
         system_prompt=system_prompt,
         output_type=NativeOutput(MessageRanking),
-        model_settings=LLM_MODEL_SETTINGS,
+        model_settings=model_settings(),
     )
 
 
@@ -356,7 +255,7 @@ async def send_messages_to_inbox(review_client, messages: list[InboxMessage], mi
 
 
 def linkedin_session(headless: bool, unattended: bool):
-    """Yield (context, page) for a logged-in LinkedIn session; see `linkedin_pages.open_linkedin`."""
+    """Yield (context, page) for a logged-in LinkedIn session; see `linkedin.session.open_linkedin`."""
     return open_linkedin(headless, unattended)
 
 
@@ -424,24 +323,15 @@ async def manage_linkedin_inbox(
     return counts
 
 
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Manage LinkedIn inbox messages.")
+def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--num-messages", type=int, default=100, help="Safety cap on conversations to scan per run (default: 100). Scanning stops earlier once it reaches conversations already handled.")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode.")
     parser.add_argument("--cleanup-only", action="store_true", help="Close reviews for conversations you replied to or archived on LinkedIn; makes no LLM calls.")
-    parser.add_argument(
-        "--model-backend",
-        choices=["ollama", "openai", "azure", "fallback"],
-        default=None,
-        help=f"Model backend to use (default: MODEL_BACKEND env var, currently {MODEL_BACKEND!r}).",
-    )
     parser.add_argument("--send-to-inbox", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--min-urgency", type=int, default=4, help="Conversations scoring below this get a 'Low urgency' label in Agent Inbox; they are still queued (default: 4).")
-    args = parser.parse_args()
 
-    if args.model_backend and args.model_backend != MODEL_BACKEND:
-        model = build_model(args.model_backend)
 
+def run_command(args: argparse.Namespace) -> int:
+    configure(args.model_backend)
     asyncio.run(manage_linkedin_inbox(args.num_messages, min_urgency=args.min_urgency, headless=args.headless, cleanup_only=args.cleanup_only))
+    return 0

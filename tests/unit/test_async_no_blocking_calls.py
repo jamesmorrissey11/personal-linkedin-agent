@@ -18,8 +18,8 @@ from pathlib import Path
 import pytest
 from blockbuster import BlockingError, blockbuster_ctx
 
-import linkedin_pages
-import unattended
+from linkedin_agent import runtime
+from linkedin_agent.linkedin import session
 from tests.async_helpers import run_async_test
 
 
@@ -47,7 +47,7 @@ def test_linkedin_lock_does_not_block_the_event_loop(tmp_path: Path):
     lock_path = tmp_path / "nested" / "linkedin.lock"
 
     async def scenario():
-        async with linkedin_pages.linkedin_lock(5, lock_path):
+        async with session.linkedin_lock(5, lock_path):
             return True
 
     assert run_under_blockbuster(scenario) is True
@@ -58,12 +58,12 @@ def test_linkedin_lock_still_excludes_a_second_holder(tmp_path: Path):
     lock_path = tmp_path / "linkedin.lock"
 
     async def scenario():
-        async with linkedin_pages.linkedin_lock(5, lock_path):
-            with pytest.raises(linkedin_pages.LinkedInBusyError):
-                async with linkedin_pages.linkedin_lock(1.5, lock_path):
+        async with session.linkedin_lock(5, lock_path):
+            with pytest.raises(session.LinkedInBusyError):
+                async with session.linkedin_lock(1.5, lock_path):
                     pass
         # The lock is reusable once released.
-        async with linkedin_pages.linkedin_lock(5, lock_path):
+        async with session.linkedin_lock(5, lock_path):
             return True
 
     assert run_under_blockbuster(scenario) is True
@@ -73,7 +73,7 @@ def test_auth_state_prep_does_not_block_the_event_loop(tmp_path: Path):
     state_path = tmp_path / ".auth" / "state.json"
 
     async def scenario():
-        await linkedin_pages.ensure_auth_state(state_path)
+        await session.ensure_auth_state(state_path)
 
     run_under_blockbuster(scenario)
 
@@ -87,7 +87,7 @@ def test_auth_state_prep_keeps_an_existing_session(tmp_path: Path):
     state_path.write_text('{"cookies": ["real-session"]}')
 
     async def scenario():
-        await linkedin_pages.ensure_auth_state(state_path)
+        await session.ensure_auth_state(state_path)
 
     run_under_blockbuster(scenario)
 
@@ -104,10 +104,10 @@ def test_notify_async_runs_the_notifier_off_the_event_loop(monkeypatch, tmp_path
         (tmp_path / "notified").write_text(f"{title}:{message}")
         calls.append((title, message))
 
-    monkeypatch.setattr(unattended, "notify", fake_notify)
+    monkeypatch.setattr(runtime, "notify", fake_notify)
 
     async def scenario():
-        await unattended.notify_async("LinkedIn action failed", "Jane Doe: boom")
+        await runtime.notify_async("LinkedIn action failed", "Jane Doe: boom")
 
     run_under_blockbuster(scenario)
 
@@ -120,10 +120,10 @@ def test_notify_async_does_not_propagate_notifier_failures(monkeypatch):
     def exploding_notify(title: str, message: str) -> None:
         raise OSError("osascript missing")
 
-    monkeypatch.setattr(unattended, "notify", exploding_notify)
+    monkeypatch.setattr(runtime, "notify", exploding_notify)
 
     async def scenario():
-        await unattended.notify_async("t", "m")
+        await runtime.notify_async("t", "m")
         return "survived"
 
     assert run_under_blockbuster(scenario) == "survived"
@@ -131,7 +131,7 @@ def test_notify_async_does_not_propagate_notifier_failures(monkeypatch):
 
 def test_review_graph_uses_the_async_notifier():
     """Guards against a sync notify() call creeping back into a graph node."""
-    source = (Path(__file__).resolve().parents[2] / "review_graph.py").read_text()
+    source = (Path(__file__).resolve().parents[2] / "src" / "linkedin_agent" / "review" / "graphs.py").read_text()
 
     assert "await notify_async(" in source
     assert "\n    notify(" not in source
@@ -143,7 +143,7 @@ def test_sleep_in_lock_wait_is_async(tmp_path: Path):
     ticks = []
 
     async def scenario():
-        async with linkedin_pages.linkedin_lock(5, lock_path):
+        async with session.linkedin_lock(5, lock_path):
 
             async def heartbeat():
                 for _ in range(3):
@@ -151,8 +151,8 @@ def test_sleep_in_lock_wait_is_async(tmp_path: Path):
                     ticks.append(1)
 
             beat = asyncio.create_task(heartbeat())
-            with pytest.raises(linkedin_pages.LinkedInBusyError):
-                async with linkedin_pages.linkedin_lock(0.4, lock_path):
+            with pytest.raises(session.LinkedInBusyError):
+                async with session.linkedin_lock(0.4, lock_path):
                     pass
             await beat
 

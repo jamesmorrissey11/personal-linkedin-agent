@@ -1,8 +1,8 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "invitation_review": "./review_graph.py:graph",
-    "message_review": "./review_graph.py:message_graph"
+    "invitation_review": "./src/linkedin_agent/review/graphs.py:graph",
+    "message_review": "./src/linkedin_agent/review/graphs.py:message_graph"
   },
   "env": ".env"
 }
