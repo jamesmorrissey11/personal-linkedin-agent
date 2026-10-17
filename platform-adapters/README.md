@@ -22,12 +22,7 @@ Agentic-Agile is platform-agnostic by design. The adapter system bridges the gen
 ┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐
 │   agent-tools/    │ │  issue-trackers/  │ │     ci-cd/        │
 │                   │ │                   │ │  (planned for v2) │
-│ Claude Code       │ │ GitHub Issues     │ │                   │
-│ GitHub Copilot    │ │                   │ │                   │
-│ Cursor            │ │                   │ │                   │
-│ Windsurf          │ │                   │ │                   │
-│ Cline             │ │                   │ │                   │
-│ Aider             │ │                   │ │                   │
+│ GitHub Copilot    │ │ GitHub Issues     │ │                   │
 └───────────────────┘ └───────────────────┘ └───────────────────┘
 ```
 
@@ -56,7 +51,7 @@ Agentic-Agile is platform-agnostic by design. The adapter system bridges the gen
 ### Adding an agent-tools adapter
 
 1. Create `platform-adapters/agent-tools/<tool-name>/` directory.
-2. Add the three required files described in [agent-tools/README.md](agent-tools/README.md): `README.md`, a target-named template file (named after the literal filename your agent reads — e.g., `CLAUDE.md`, `.cursorrules`, `.windsurfrules`, `.clinerules`, `CONVENTIONS.md`, or `copilot-instructions.md`), and `quickstart.md`.
+2. Add the three required files described in [agent-tools/README.md](agent-tools/README.md): `README.md`, a target-named template file (named after the literal filename your agent reads — e.g., `copilot-instructions.md`), and `quickstart.md`.
 3. Update `platform-adapters/agent-tools/README.md` to list the new adapter in the Available Adapters table.
 4. Open a PR — include a working example project demonstrating the adapter.
 
@@ -81,8 +76,6 @@ The ci-cd layer is planned for v2. See [ci-cd/README.md](ci-cd/README.md) for wh
 
 | Combo | Agent Tool | Issue Tracker | CI/CD | Status |
 |-------|-----------|---------------|-------|--------|
-| [`claude-github-github-actions.md`](combos/claude-github-github-actions.md) | Claude Code | GitHub Issues | GitHub Actions | Stub |
 | [`github-copilot-github-github-actions.md`](combos/github-copilot-github-github-actions.md) | GitHub Copilot | GitHub Issues | GitHub Actions | Stub |
-| [`cursor-github-github-actions.md`](combos/cursor-github-github-actions.md) | Cursor | GitHub Issues | GitHub Actions | Stub |
 
 > More combos are added as the community contributes. Check [combos/](combos/) for the current list.

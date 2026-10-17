@@ -61,7 +61,6 @@ Check the title of this file (the first `#` heading):
 |-----------|-------|--------|
 | Title still reads the template sentinel `[Project Name]` | **Template state** | Run the Guided Onboarding Dialogue below. Do not modify any files until the dialogue is complete. |
 | Title contains a real project name and you have a specific task | **Configured state** | Skip to Quick Start below. |
-| You are contributing to the template itself (not a derived project) | **Contributor state** | Read `CONTRIBUTING-AGENTS.md` before proceeding. |
 
 ### Quick Start (Configured State)
 
