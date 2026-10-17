@@ -122,7 +122,7 @@ Ignore recruiters.
 If you have any uncertainty at all as to whether the person meets the acceptance criteria, respond with 'undecided'."""
 
 
-def build_agent(backend: str) -> Agent:
+def build_agent(backend: str) -> Agent[None, InvitationDecision]:
     return Agent(
         build_model(backend),
         system_prompt=INVITATION_DECISION_SYSTEM_PROMPT,
@@ -279,6 +279,8 @@ async def get_profile_info(page: Page, profile_url: str) -> str:
         try:
             main_content = await new_page.wait_for_selector("main, div[role='main']", timeout=PROFILE_CONTENT_TIMEOUT_MS)
         except PlaywrightTimeoutError:
+            main_content = None
+        if main_content is None:
             logger.warning("Main content not found on profile page: %s (current URL: %s)", profile_url, new_page.url)
             return "Profile information not available because LinkedIn did not finish loading the profile page."
 
@@ -465,11 +467,13 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
 
         logger.info(f"\nIgnored ({len(ignored)}):")
         for invitation in ignored:
-            logger.info(f"- {invitation.name} ({invitation.job_title})\n  Profile: {invitation.profile}\n  Reason: {invitation.decision.reason}")
+            reason = invitation.decision.reason if invitation.decision else "unknown"
+            logger.info(f"- {invitation.name} ({invitation.job_title})\n  Profile: {invitation.profile}\n  Reason: {reason}")
 
         logger.info(f"\nUndecided ({len(undecided)}):")
         for invitation in undecided:
-            logger.info(f"- {invitation.name} ({invitation.job_title}) {invitation.profile}\n  Reason: {invitation.decision.reason}")
+            reason = invitation.decision.reason if invitation.decision else "unknown"
+            logger.info(f"- {invitation.name} ({invitation.job_title}) {invitation.profile}\n  Reason: {reason}")
 
         # Close the browser
         await browser.close()

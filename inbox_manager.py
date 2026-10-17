@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent, NativeOutput
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.ollama import OllamaModel
-from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
@@ -44,13 +44,12 @@ def build_ollama_model() -> OllamaModel:
     return OllamaModel(OLLAMA_MODEL, provider=OllamaProvider(base_url=OLLAMA_BASE_URL))
 
 
-def build_azure_model() -> OpenAIModel:
+def build_azure_model() -> OpenAIChatModel:
     """Build the Azure OpenAI model using this script's existing client-setup pattern.
 
     Note: this diverges from `invitations_manager.py`'s Azure client setup (base URL suffix, sync vs.
-    async credential, deprecated `OpenAIModel` vs. `OpenAIChatModel`) — see
-    `.github/instructions/python.instructions.md`. Left as-is intentionally; not fixed as part of adding
-    local-model support.
+    async credential) — see `.github/instructions/python.instructions.md`. Left as-is intentionally;
+    not fixed as part of adding local-model support.
     """
     required_vars = ["AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_CHAT_DEPLOYMENT"]
     missing_vars = [var for var in required_vars if not os.environ.get(var)]
@@ -60,11 +59,19 @@ def build_azure_model() -> OpenAIModel:
         azure.identity.DefaultAzureCredential(),
         "https://cognitiveservices.azure.com/.default",
     )
+
+    async def async_token_provider() -> str:
+        # AsyncOpenAI expects an async callable for `api_key`, but `get_bearer_token_provider` returns a
+        # sync one here (this script intentionally uses a sync `azure.identity` credential, unlike
+        # `invitations_manager.py` - see `.github/instructions/python.instructions.md`). Wrap it rather
+        # than switching credential types.
+        return token_provider()
+
     azure_client = AsyncOpenAI(
         base_url=os.environ["AZURE_OPENAI_ENDPOINT"],
-        api_key=token_provider,
+        api_key=async_token_provider,
     )
-    return OpenAIModel(os.environ["AZURE_OPENAI_CHAT_DEPLOYMENT"], provider=OpenAIProvider(openai_client=azure_client))
+    return OpenAIChatModel(os.environ["AZURE_OPENAI_CHAT_DEPLOYMENT"], provider=OpenAIProvider(openai_client=azure_client))
 
 
 def build_model(backend: str):

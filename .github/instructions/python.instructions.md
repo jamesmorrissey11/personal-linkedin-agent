@@ -4,10 +4,11 @@ description: Conventions, client-setup pitfalls, lint/format, and test invocatio
 ---
 
 - Critical inconsistency — do not copy `inbox_manager.py`'s Azure OpenAI client setup:
-  `invitations_manager.py` uses `base_url=AZURE_OPENAI_ENDPOINT + "/openai/v1"`, async
-  `azure.identity.aio.AzureDeveloperCliCredential`, and the current `OpenAIChatModel`; `inbox_manager.py`
-  uses `base_url=AZURE_OPENAI_ENDPOINT` (no `/openai/v1` suffix), sync `azure.identity.DefaultAzureCredential`,
-  and the deprecated `OpenAIModel`. When adding a third script or touching agent setup, replicate
+  `invitations_manager.py` uses `base_url=AZURE_OPENAI_ENDPOINT + "/openai/v1"` and async
+  `azure.identity.aio.AzureDeveloperCliCredential`; `inbox_manager.py` uses
+  `base_url=AZURE_OPENAI_ENDPOINT` (no `/openai/v1` suffix) and sync `azure.identity.DefaultAzureCredential`
+  (wrapped in an async function so its token provider satisfies `AsyncOpenAI`'s typing). Both scripts now
+  use the current `OpenAIChatModel`. When adding a third script or touching agent setup, replicate
   `invitations_manager.py`'s pattern (the known-working one); flag/ask before "fixing" `inbox_manager.py` —
   this divergence is documented, intentional-until-decided tech debt, not an oversight to silently correct.
 - No shared module: logging setup, the Playwright login/session-cache flow, and CLI arg parsing are each
