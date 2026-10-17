@@ -16,7 +16,7 @@ from urllib.parse import unquote, urlparse, urlunparse
 from playwright.async_api import ElementHandle, Page, async_playwright
 from pydantic import BaseModel
 
-from linkedin_guard import ApprovedAction, blocked_write_summary, install_linkedin_write_guard, safe_click
+from linkedin_guard import ApprovedAction, blocked_write_summary, install_linkedin_write_guard
 from unattended import LoginRequiredError
 
 logger = logging.getLogger("linkedin_pages")
@@ -249,41 +249,82 @@ def is_linkedin_conversation_url(value: object) -> bool:
     return parsed.scheme == "https" and parsed.hostname in {"linkedin.com", "www.linkedin.com"} and parsed.path.startswith("/messaging/")
 
 
-async def get_logged_in_user_name(page: Page) -> str:
-    """Extract the logged-in user's name from LinkedIn."""
+SELF_PROFILE_URL = "https://www.linkedin.com/in/me/"
+LINKEDIN_TITLE_SUFFIX = "| LinkedIn"
+
+# Scoped to the logged-in user's own nav avatar. Never widen these to bare "a[href*='/in/'] img[alt]":
+# on the messaging page that matches a conversation participant, which would make the agent think
+# someone else's message was the user's own.
+ME_AVATAR_SELECTORS = (
+    ".global-nav__primary-link-me-menu-trigger img[alt]",
+    "button[aria-label='Open profile menu'] img[alt]",
+    ".global-nav__me-photo",
+)
+
+
+async def _name_from_nav(page: Page) -> str | None:
+    """Read the user's display name out of the top nav without clicking anything."""
+    for selector in ME_AVATAR_SELECTORS:
+        element = await page.query_selector(selector)
+        if not element:
+            continue
+        alt_text = (await element.get_attribute("alt") or "").strip()
+        if alt_text and alt_text.casefold() not in UNKNOWN_AUTHORS:
+            return alt_text
+
+    profile_button = await page.query_selector("button[aria-label*='View profile for']")
+    if profile_button:
+        aria_label = await profile_button.get_attribute("aria-label") or ""
+        name = aria_label.replace("View profile for", "").strip()
+        if name and name.casefold() not in UNKNOWN_AUTHORS:
+            return name
+
+    return None
+
+
+async def _name_from_self_profile(page: Page) -> str | None:
+    """Resolve the name via /in/me/, which redirects to the user's own profile.
+
+    The newer React surfaces drop the global-nav identity hooks entirely, so this is the dependable
+    fallback. The profile <h1> renders lazily and is empty on load, but the document title is always
+    "<Display Name> | LinkedIn" and matches the author strings used in conversations. The original
+    page is restored so callers see no navigation side effect.
+    """
+    if "linkedin.com" not in page.url:
+        return None
+
+    original_url = page.url
     try:
-        # Try to get the user's name from the profile button/dropdown
-        profile_button = await page.query_selector("button[aria-label*='View profile']")
-        if profile_button:
-            # Get the aria-label which often contains the user's name
-            aria_label = await profile_button.get_attribute("aria-label")
-            if aria_label and "View profile for" in aria_label:
-                name = aria_label.replace("View profile for", "").strip()
-                if name:
-                    return name
+        await page.goto(SELF_PROFILE_URL)
+        await page.wait_for_load_state("load")
+        # A signed-out session bounces to a login/auth wall instead of a profile.
+        if "/in/" not in page.url:
+            return None
+        title = (await page.title() or "").strip()
+    finally:
+        try:
+            await page.goto(original_url)
+        except Exception as e:
+            logger.warning(f"Could not return to {original_url} after reading the profile name: {e}")
 
-        # Alternative: try to get name from the "Me" dropdown
-        me_button = await page.query_selector("button[aria-label='Open profile menu']")
-        if me_button:
-            if await safe_click(me_button):
-                await page.wait_for_timeout(1000)
+    if not title.endswith(LINKEDIN_TITLE_SUFFIX):
+        return None
+    name = title[: -len(LINKEDIN_TITLE_SUFFIX)].strip()
+    if not name or name.casefold() in UNKNOWN_AUTHORS:
+        return None
+    return name
 
-            # Look for the name in the dropdown
-            name_element = await page.query_selector(".profile-rail-card__actor-link")
-            if name_element:
-                name = await name_element.inner_text()
-                if name:
-                    return name.strip()
 
-        # Fallback: try to get from top navigation
-        nav_name = await page.query_selector(".global-nav__me-photo")
-        if nav_name:
-            alt_text = await nav_name.get_attribute("alt")
-            if alt_text:
-                return alt_text.strip()
+async def get_logged_in_user_name(page: Page) -> str:
+    """Return the logged-in user's display name, or "Unknown User" when it cannot be established.
 
-        return "Unknown User"
-
+    inbox_manager compares this against each conversation's latest author, so a wrong name is worse
+    than no name: "Unknown User" merely keeps every conversation queued for review, while a
+    participant's name would hide threads that still need a reply. Every lookup is therefore scoped
+    to the user's own identity, and anything ambiguous fails closed.
+    """
+    try:
+        return await _name_from_nav(page) or await _name_from_self_profile(page) or "Unknown User"
     except Exception as e:
         logger.warning(f"Could not extract logged-in user name: {e}")
         return "Unknown User"

@@ -1,0 +1,21 @@
+<!doctype html>
+<!--
+  The newer React feed renders obfuscated class names and no global-nav identity hooks, so the nav
+  selector chain finds nothing here. Profile links for OTHER people appear before the user's own,
+  which is why first-match selectors like "a[href*='/in/'] img[alt]" are unsafe.
+-->
+<html>
+  <head>
+    <title>(12) Feed | LinkedIn</title>
+  </head>
+  <body>
+    <div class="i0lkvy">
+      <a href="https://www.linkedin.com/in/other-person/">
+        <img alt="Other Person" src="other.png" />
+      </a>
+      <a href="https://www.linkedin.com/in/james-p-morrissey/">
+        <img alt="James Morrissey" src="me.png" />
+      </a>
+    </div>
+  </body>
+</html>
