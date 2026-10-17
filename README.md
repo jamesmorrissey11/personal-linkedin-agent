@@ -78,10 +78,15 @@ A related option is VS Code Dev Containers, which will open the project in your 
     uv run playwright install chromium
     ```
 
+5. Create your `.env` from the template; `.env.example` documents every setting:
+
+    ```shell
+    cp .env.example .env
+    ```
 
 ## Configuring Azure AI models
 
-This project uses Azure OpenAI and includes infrastructure as code (IaC) to provision a `gpt-5.5` deployment. The IaC is defined in the `infra` directory and uses the Azure Developer CLI. Provisioned resources incur Azure costs.
+This project uses Azure OpenAI and includes infrastructure as code (IaC) to provision a `gpt-5.5` deployment. The IaC is defined in `deploy/azure/` and uses the Azure Developer CLI; run the `azd` commands below from that folder. Provisioned resources incur Azure costs.
 
 1. Make sure the [Azure Developer CLI (azd)](https://aka.ms/install-azd) is installed.
 
@@ -100,12 +105,13 @@ This project uses Azure OpenAI and includes infrastructure as code (IaC) to prov
 3. Provision the OpenAI account:
 
     ```shell
+    cd deploy/azure
     azd provision
     ```
 
     It will prompt you to provide an `azd` environment name (like "agents-demos"), select a subscription from your Azure account, and select a location. Then it will provision the resources in your account.
 
-4. Once the resources are provisioned, you should now see a local `.env` file with all the environment variables needed to run the scripts.
+4. Once the resources are provisioned, you should now see the repo-root `.env` file with all the environment variables needed to run the scripts.
 5. To delete the resources, run:
 
     ```shell
@@ -211,15 +217,15 @@ Available flags:
 * `--headless`: run the browser without a visible window.
 * `--model-backend` (`ollama` | `openai` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring OpenAI models](#configuring-openai-models) and [Configuring Ollama Models](#configuring-ollama-models).
 
-On first run (or whenever the saved session expires), a browser window opens to `linkedin.com/login` and waits for you to log in manually; the resulting session is cached to `playwright/.auth/state.json` so future runs skip the login step.
+On first run (or whenever the saved session expires), a browser window opens to `linkedin.com/login` and waits for you to log in manually; the resulting session is cached in the runtime folder (`browser/state.json`; see [Runtime state](#runtime-state)) so future runs skip the login step.
 
 ## Human review with Agent Inbox
 
-Every proposed invitation action and reply-worthy message must be reviewed by a human in [Agent Inbox](https://github.com/langchain-ai/agent-inbox), included as a git submodule in `agent-inbox/`. `src/linkedin_agent/review/graphs.py` defines two LangGraph graphs that pause with an `interrupt`: `invitation_review` (**Accept** / **Ignore**) and `message_review` (**Accept** the suggested reply, **Edit** it, or **Ignore**). Your decision is the action: the graph immediately accepts or ignores the invitation, sends the exact submitted reply, or archives the ignored conversation. A failed or stale action returns to Agent Inbox with a visible note instead of silently closing.
+Every proposed invitation action and reply-worthy message must be reviewed by a human in [Agent Inbox](https://github.com/langchain-ai/agent-inbox), included as a git submodule in `deploy/agent-inbox/` (James's fork, [`jamesmorrissey11/agent-inbox`](https://github.com/jamesmorrissey11/agent-inbox), branch `personal-linkedin-agent`, which carries the compatibility fixes this project needs). `src/linkedin_agent/review/graphs.py` defines two LangGraph graphs that pause with an `interrupt`: `invitation_review` (**Accept** / **Ignore**) and `message_review` (**Accept** the suggested reply, **Edit** it, or **Ignore**). Your decision is the action: the graph immediately accepts or ignores the invitation, sends the exact submitted reply, or archives the ignored conversation. A failed or stale action returns to Agent Inbox with a visible note instead of silently closing.
 
-1. Fetch the UI and install it (requires Node.js and yarn): `git submodule update --init && git -C agent-inbox apply ../patches/agent-inbox-fixes.patch && (cd agent-inbox && yarn install)`. The patch fixes nested `<p>` hydration errors, applies styling outside `react-markdown` instead of passing its removed `className` prop, and makes a scheme-less Deployment URL (e.g. `localhost:2024`) default to `http://` instead of throwing "Invalid URL". Skip the apply if already applied.
-2. Start the LangGraph server: `uv run langgraph dev --no-browser --no-reload` (serves `http://localhost:2024`; disabling reload prevents an edit from interrupting an action)
-3. Start the UI: `cd agent-inbox && yarn dev` and open <http://localhost:3000>. In **Settings**, enter your LangSmith API key, then **Add Inbox** with Deployment URL `http://localhost:2024` and Assistant/Graph ID `invitation_review`. Add a second inbox with Graph ID `message_review` for messages.
+1. Fetch the UI and install it (requires Node.js and yarn): `git submodule update --init && (cd deploy/agent-inbox && yarn install)`. The fork fixes nested `<p>` hydration errors, applies styling outside `react-markdown` instead of passing its removed `className` prop, and makes a scheme-less Deployment URL (e.g. `localhost:2024`) default to `http://` instead of throwing "Invalid URL". To pick up a newer fork commit: `git -C deploy/agent-inbox pull && git add deploy/agent-inbox`.
+2. Start the LangGraph server: `uv run linkedin-agent server` (serves `http://localhost:2024`; `--port` to change). It runs `langgraph dev` with reload disabled, so an edit can't interrupt an action, from the runtime folder, so Agent Inbox shows the same history whichever checkout or worktree you start it from.
+3. Start the UI: `cd deploy/agent-inbox && yarn dev` and open <http://localhost:3000>. In **Settings**, enter your LangSmith API key, then **Add Inbox** with Deployment URL `http://localhost:2024` and Assistant/Graph ID `invitation_review`. Add a second inbox with Graph ID `message_review` for messages.
 4. Analyze invitations and queue every one for review: `uv run linkedin-agent invitations`
 5. Resolve an invitation in Agent Inbox. **Accept** or **Ignore** acts on LinkedIn immediately and closes the item only after the action succeeds.
 6. Messages: `uv run linkedin-agent inbox [--min-urgency 4]` queues every conversation where the other person spoke last. Urgency is a label (`Low urgency`, `Couldn't score`), not a filter. **Accept** sends the suggested reply, **Edit** sends the exact edited text, and **Ignore** archives the conversation. Accept is hidden when there is no non-empty suggestion.
@@ -247,11 +253,11 @@ Environment variables (read from the environment or `.env`, never logged): `LANG
 uv run linkedin-agent daily --headless
 ```
 
-* Exit codes: `0` success, `1` health failure (e.g. a scrape returned zero items, so nothing is closed), `2` LinkedIn login needed (a macOS notification is posted instead of waiting). Logs go to `logs/daily_run.log`.
+* Exit codes: `0` success, `1` health failure (e.g. a scrape returned zero items, so nothing is closed), `2` LinkedIn login needed (a macOS notification is posted instead of waiting). Logs go to `logs/daily_run.log` in the runtime folder.
 * Run reports show new / already queued / superseded counts, recovered interrupted actions, and retired legacy decisions.
 * Stale items are closed as `superseded` (never deleted): an invitation gone from a full, non-empty list, a conversation whose latest message is exactly yours, a conversation archived on LinkedIn, or a conversation replaced by a newer incoming message. Ambiguous cases are kept.
 * A new incoming message after a reply or archive is queued again because deduplication only considers currently pending reviews.
-* Schedule it with launchd (daily 06:30 sync run and a keep-alive `langgraph dev --no-reload` server): see [`scheduling/README.md`](scheduling/README.md).
+* Schedule it with launchd (daily 06:30 sync run and a keep-alive `linkedin-agent server`): see [`deploy/launchd/README.md`](deploy/launchd/README.md).
 
 ## Running the inbox manager
 
@@ -269,7 +275,7 @@ Available flags:
 * `--cleanup-only`: no LLM; close pending reviews for conversations you replied to or archived directly on LinkedIn.
 * `--model-backend` (`ollama` | `openai` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring OpenAI models](#configuring-openai-models) and [Configuring Ollama Models](#configuring-ollama-models).
 
-It reuses the same `playwright/.auth/state.json` login session as the invitation manager.
+It reuses the same cached login session (in the runtime folder) as the invitation manager.
 
 > **Note:** the inbox workflow builds its Azure OpenAI client differently than the invitation workflow (different base URL construction and credential type). Both variants are kept, deliberately, in `src/linkedin_agent/llm.py`. See [Architecture](#architecture) for details.
 
@@ -291,6 +297,26 @@ Recorded/appended cases (via `linkedin-agent invitations --record-eval-cases`) i
 On average, each LinkedIn invitation processed by the agent requires approximately 200 tokens. If the agent decides it needs to open the full profile page to gather more information, it requires an additional 400 tokens on average.
 
 OpenAI and Azure OpenAI cost depends on the selected model and usage. See the [OpenAI API pricing page](https://openai.com/api/pricing/) and [Azure OpenAI pricing page](https://azure.microsoft.com/pricing/details/cognitive-services/openai-service/).
+
+## Runtime state
+
+Nothing the agent generates while running is written into the repo. Runtime state lives in one per-user folder,
+`~/Library/Application Support/linkedin-agent` on macOS (`~/.local/state/linkedin-agent` elsewhere; override with
+`LINKEDIN_AGENT_HOME`):
+
+| Path | What it is | Safe to delete? |
+|---|---|---|
+| `browser/state.json` | Cached LinkedIn login session | Yes, but you'll have to log in again. Treat it like a password. |
+| `browser/linkedin.lock` | Keeps the daily sync, manual runs, and Agent Inbox actions from using LinkedIn at the same time | Yes, when nothing is running |
+| `langgraph/.langgraph_api/` | Agent Inbox review history and the de-duplication state the daily sync relies on | **No.** Deleting it brings back items you already handled. |
+| `logs/` | `daily_run.log` and launchd output | Yes |
+| `artifacts/` | Leftovers moved out of the repo by the migration script (AI-tool scratch output) | Yes |
+
+Upgrading from a checkout that still has `playwright/.auth/`, `.langgraph_api/`, or `logs/` in the repo: stop the LangGraph
+server, then run `uv run python scripts/migrate_runtime_state.py` (add `--dry-run` to preview). It moves them into the
+runtime folder and never overwrites existing data.
+
+Tool caches (`ruff`, `pytest`) go to the git-ignored `.cache/` folder.
 
 ## Architecture
 

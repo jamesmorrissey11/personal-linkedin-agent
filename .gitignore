@@ -148,7 +148,16 @@ static/
 
 .DS_Store
 
+# Runtime state now lives outside the repo (see linkedin_agent.runtime.state_dir); these are the
+# pre-#47 in-repo locations, kept ignored so an old checkout can't commit them.
 playwright/.auth
+.langgraph_api/
+logs/
+
+# Tool caches (ruff and pytest are configured to write here) and AI-tool scratch output
+.cache/
+.playwright-mcp/
+.superpowers/
 
 # Playwright test output
 test-results/
@@ -157,11 +166,7 @@ playwright-report/
 # Personal editor settings (machine-specific, not portable to other contributors)
 .vscode/
 
-# LangGraph dev server state
-.langgraph_api/
 
 # Local Git worktrees
 .worktrees/
 
-# Scheduled-run logs
-logs/

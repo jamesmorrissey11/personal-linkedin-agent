@@ -1,7 +1,7 @@
 """Shared helpers for Playwright-based scraping tests.
 
 These tests never launch a credentialed LinkedIn session or touch
-``playwright/.auth/state.json``. Pages are populated from static HTML fixtures under
+the cached session in the runtime folder. Pages are populated from static HTML fixtures under
 ``tests/playwright/fixtures/`` via ``file://`` URLs, so the suite is deterministic and
 safe to run in CI.
 """

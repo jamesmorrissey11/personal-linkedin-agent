@@ -174,5 +174,5 @@ When working with AI coding agents, these conventions improve output quality:
 - No `TODO` comments without a linked issue.
 - No suppressed linter warnings without a justifying comment.
 - No wildcard imports (import only what you use).
-- No committed LinkedIn session state (`playwright/.auth/`) or `.env` files.
+- No committed LinkedIn session state, runtime data, or `.env` files. Runtime state lives outside the repo (see `linkedin_agent.runtime`).
 - No replacing multi-selector scraping fallbacks with a single selector.

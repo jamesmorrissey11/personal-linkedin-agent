@@ -13,19 +13,23 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 from linkedin_agent.linkedin.guard import ApprovedAction, blocked_write_summary, install_linkedin_write_guard
-from linkedin_agent.runtime import LoginRequiredError
+from linkedin_agent.runtime import LoginRequiredError, browser_dir
 
 logger = logging.getLogger("linkedin_session")
 logger.setLevel(logging.INFO)
-
-LOCK_PATH = Path("playwright/.auth/linkedin.lock")
 
 
 class LinkedInBusyError(RuntimeError):
     """Another process holds the LinkedIn session lock."""
 
 
-AUTH_STATE_PATH = Path("playwright/.auth/state.json")
+def auth_state_path() -> Path:
+    """The cached LinkedIn browser session, shared by every command and the LangGraph server."""
+    return browser_dir() / "state.json"
+
+
+def lock_path() -> Path:
+    return browser_dir() / "linkedin.lock"
 
 
 def _acquire_flock(handle) -> bool:
@@ -38,13 +42,14 @@ def _acquire_flock(handle) -> bool:
 
 
 @asynccontextmanager
-async def linkedin_lock(timeout_seconds: float, path: Path = LOCK_PATH):
+async def linkedin_lock(timeout_seconds: float, path: Path | None = None):
     """Hold an exclusive flock on `path`, polling once per second; raise LinkedInBusyError on timeout.
 
     Every filesystem call runs in a worker thread. `langgraph dev` guards the graphs with blockbuster,
     which turns a blocking call on the event loop into a BlockingError that aborts the action, and the
     lock is held for the whole LinkedIn session, so blocking here would also stall the server.
     """
+    path = path or lock_path()
     await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
     # flock is per open file description, so each entry opens its own handle.
     handle = await asyncio.to_thread(path.open, "a")
@@ -69,9 +74,9 @@ def _ensure_auth_state_sync(path: Path) -> None:
         path.write_text("{}")
 
 
-async def ensure_auth_state(path: Path = AUTH_STATE_PATH) -> None:
+async def ensure_auth_state(path: Path | None = None) -> None:
     """Create an empty storage-state file when none exists, without blocking the event loop."""
-    await asyncio.to_thread(_ensure_auth_state_sync, path)
+    await asyncio.to_thread(_ensure_auth_state_sync, path or auth_state_path())
 
 
 @asynccontextmanager
@@ -86,7 +91,7 @@ async def open_linkedin(headless: bool, unattended: bool, approval: ApprovedActi
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=headless)
             try:
-                context = await browser.new_context(storage_state=str(AUTH_STATE_PATH))
+                context = await browser.new_context(storage_state=str(auth_state_path()))
                 await install_linkedin_write_guard(context, approval)
                 page = await context.new_page()
                 await page.goto("https://www.linkedin.com/feed")
@@ -97,7 +102,7 @@ async def open_linkedin(headless: bool, unattended: bool, approval: ApprovedActi
                     await page.goto("https://www.linkedin.com/login")
                     await page.wait_for_url("https://www.linkedin.com/feed/**", timeout=120000)
                     logger.info("Login detected. Saving storage state...")
-                    await context.storage_state(path=str(AUTH_STATE_PATH))
+                    await context.storage_state(path=str(auth_state_path()))
                 yield context, page
             finally:
                 if summary := blocked_write_summary():

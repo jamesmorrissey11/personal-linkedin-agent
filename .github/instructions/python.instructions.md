@@ -13,7 +13,7 @@ description: Conventions, client-setup pitfalls, lint/format, and test invocatio
   - `linkedin/` (everything that touches Playwright/LinkedIn): `models.py`, `session.py`
     (`open_linkedin`, the lock, login detection), `pages.py` (read-only scraping helpers and selector
     fallback chains), `guard.py` (write guard, `safe_click`), and `actions.py` (the only mutations).
-  - `review/` (everything that touches LangGraph/Agent Inbox): `graphs.py` (served via `langgraph.json`)
+  - `review/` (everything that touches LangGraph/Agent Inbox): `graphs.py` (served by `linkedin-agent server` via `deploy/langgraph.json`)
     and `queue.py`.
   - A new workflow is one new module plus a `cli.py` subcommand. Add a subpackage only at a real external
     boundary, and record why.
@@ -35,8 +35,12 @@ description: Conventions, client-setup pitfalls, lint/format, and test invocatio
   recruiters" are text in the system prompt with no deterministic keyword/regex backstop. If asked to make
   a rule more reliable, decide whether it needs code-level enforcement vs. a prompt tweak — don't assume
   one or the other.
-- Session/auth state is file-based, not env/DB: `playwright/.auth/state.json` caches the Playwright browser
-  session after a manual LinkedIn login and is used by every session through `linkedin.session.open_linkedin`.
+- Runtime state is file-based, not env/DB, and lives outside the repo in `runtime.state_dir()`
+  (`~/Library/Application Support/linkedin-agent`, override `LINKEDIN_AGENT_HOME`): `browser/state.json` caches
+  the Playwright session after a manual LinkedIn login and is used by every session through
+  `linkedin.session.open_linkedin`. Never write state or logs relative to the working directory; use the
+  `runtime` helpers (`browser_dir`, `langgraph_dir`, `logs_dir`). Tests get an isolated folder automatically
+  (`tests/conftest.py`).
 - `evals/invitation_cases.yaml` is an append-only eval dataset with no schema validation or dedup —
   `linkedin-agent invitations --record-eval-cases` appends to it freeform.
 - Preserve CSS-selector/`aria-label` scraping fallback chains (e.g. `INVITATION_CARD_SELECTORS` in

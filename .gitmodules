@@ -1,3 +1,4 @@
 [submodule "agent-inbox"]
-	path = agent-inbox
-	url = https://github.com/langchain-ai/agent-inbox.git
+	path = deploy/agent-inbox
+	url = https://github.com/jamesmorrissey11/agent-inbox.git
+	branch = personal-linkedin-agent

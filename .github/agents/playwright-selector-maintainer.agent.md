@@ -35,7 +35,7 @@ LinkedIn's live, frequently-changing DOM — the project's single biggest source
    failure from the reported error back through the selector chain and the surrounding Playwright calls
    (`page.locator`, `wait_for_selector`, etc.) to pinpoint which selector(s) likely broke and why.
 3. **Live verification is the user's call, not yours**: this repo scrapes a real, credentialed LinkedIn
-   session (`playwright/.auth/state.json`). Never initiate a live LinkedIn Playwright run yourself —
+   session (the cached `browser/state.json` in the per-user runtime folder). Never initiate a live LinkedIn Playwright run yourself —
    propose the exact selector fix and ask the user to verify it (e.g. via
    `uv run linkedin-agent invitations --num-to-process 1` for scraping, or one deliberate decision in
    Agent Inbox for an action selector), since only they should drive authenticated LinkedIn sessions.

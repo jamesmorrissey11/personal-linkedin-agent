@@ -9,25 +9,24 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 
 from linkedin_agent import inbox, invitations
 from linkedin_agent.linkedin.guard import blocked_write_summary
 from linkedin_agent.review.graphs import GRAPH_ID, MESSAGE_GRAPH_ID
 from linkedin_agent.review.queue import get_review_client, recover_stuck_reviews, retire_legacy_reviews
-from linkedin_agent.runtime import HealthCheckError, LoginRequiredError, ReviewCounts, notify
+from linkedin_agent.runtime import HealthCheckError, LoginRequiredError, ReviewCounts, logs_dir, notify
 
 logger = logging.getLogger("daily_run")
 
 EXIT_OK = 0
 EXIT_HEALTH = 1
 EXIT_LOGIN = 2
-LOG_PATH = Path("logs/daily_run.log")
 
 
 def configure_file_logging() -> None:
-    LOG_PATH.parent.mkdir(exist_ok=True)
-    handler = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
+    log_path = logs_dir() / "daily_run.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     handler.setLevel(logging.INFO)
     for name in ("daily_run", "invitations_manager", "inbox_manager", "unattended", "llm"):

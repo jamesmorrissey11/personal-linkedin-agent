@@ -27,8 +27,8 @@
         <integer>30</integer>
     </dict>
     <key>StandardOutPath</key>
-    <string>__REPO__/logs/daily-run.out.log</string>
+    <string>__LOGS__/daily-run.out.log</string>
     <key>StandardErrorPath</key>
-    <string>__REPO__/logs/daily-run.err.log</string>
+    <string>__LOGS__/daily-run.err.log</string>
 </dict>
 </plist>

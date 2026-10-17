@@ -47,7 +47,7 @@ project-root/
 
 - Prompts are inline strings; business rules are LLM-judgment only (see `.github/instructions/python.instructions.md`)
 - Preserve multi-selector / `aria-label` fallback chains when editing scraping logic
-- Session state lives in `playwright/.auth/state.json`; never commit it
+- Runtime state (LinkedIn session, Agent Inbox data, logs) lives outside the repo in the per-user runtime folder; never commit it
 
 ## What Not to Do
 

@@ -15,18 +15,16 @@
     <array>
         <string>__UV__</string>
         <string>run</string>
-        <string>langgraph</string>
-        <string>dev</string>
-        <string>--no-browser</string>
-        <string>--no-reload</string>
+        <string>linkedin-agent</string>
+        <string>server</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>__REPO__/logs/langgraph-server.out.log</string>
+    <string>__LOGS__/langgraph-server.out.log</string>
     <key>StandardErrorPath</key>
-    <string>__REPO__/logs/langgraph-server.err.log</string>
+    <string>__LOGS__/langgraph-server.err.log</string>
 </dict>
 </plist>

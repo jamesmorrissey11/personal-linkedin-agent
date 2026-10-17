@@ -49,7 +49,7 @@ When the ci-cd layer ships, the three-layer adapter system will be complete:
 
 If you want to contribute a ci-cd adapter ahead of v2:
 
-1. Create a `platform-adapters/ci-cd/<system-name>/` directory.
+1. Create a `docs/platform-adapters/ci-cd/<system-name>/` directory.
 2. Add a `README.md` describing the pipeline template and what it provides.
 3. Add the pipeline configuration file(s) as templates.
 4. Open a PR with the label `ci-cd-adapter` and note that it's an early/experimental contribution.
