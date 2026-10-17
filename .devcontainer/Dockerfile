@@ -1,6 +1,5 @@
 FROM mcr.microsoft.com/devcontainers/python:3.12-bookworm
 
-COPY requirements.txt /tmp/pip-tmp/
+COPY --from=ghcr.io/astral-sh/uv:0.12.22 /uv /uvx /bin/
 
-RUN pip3 --disable-pip-version-check --no-cache-dir install -r /tmp/pip-tmp/requirements.txt \
-    && rm -rf /tmp/pip-tmp
+ENV UV_LINK_MODE=copy

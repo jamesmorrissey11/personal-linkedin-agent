@@ -51,6 +51,12 @@ No database. All state is file-based:
 
 None. LLM system prompts are inline Python strings in `invitations_manager.py` (invitation accept/ignore rules) and `inbox_manager.py` (message urgency scoring rules) — there is no shared prompt-template mechanism.
 
+### Dependency management
+
+Runtime and development dependencies are declared in `pyproject.toml` and resolved reproducibly through
+the committed `uv.lock`. Local, test, evaluation, and application commands run through `uv run`;
+`uv sync --all-groups` creates and updates the managed `.venv`.
+
 ## Azure Infra Stack
 
 ### Purpose
@@ -70,11 +76,12 @@ Provisions the Azure OpenAI resource (`gpt-5.5` deployment, per `infra/main.bice
 
 * **`inbox_manager.py`'s Azure OpenAI client setup diverges from `invitations_manager.py` and may be broken.** `invitations_manager.py` builds its `AsyncOpenAI` client with `base_url=os.environ["AZURE_OPENAI_ENDPOINT"] + "/openai/v1"`, an async `AzureDeveloperCliCredential`, and the current `OpenAIChatModel` (`invitations_manager.py:34-44`). `inbox_manager.py` instead uses `base_url=os.environ["AZURE_OPENAI_ENDPOINT"]` (no `/openai/v1` suffix), a sync `DefaultAzureCredential`, and the deprecated `OpenAIModel` (`inbox_manager.py:22-30`). This is flagged here for awareness; not fixed, per instruction to avoid changing production behavior.
 * **Heavy reliance on CSS selectors / `aria-label` scraping** for both invitation cards (`invitations_manager.py`, `INVITATION_CARD_SELECTORS` and multiple fallback selectors in `get_invitation_info`) and inbox messages (`inbox_manager.py`, `get_inbox_messages`). LinkedIn markup changes will silently break scraping with no compile-time signal.
-* **No automated unit tests** — `evals.py` checks LLM output quality, not scraping/parsing logic or CLI behavior.
+* **Limited automated coverage** — fixture-based Playwright tests cover selected scraping behavior, and
+  `evals.py` checks invitation-decision output quality, but session/login flow and CLI behavior remain
+  untested.
 * **Duplicated boilerplate** between `invitations_manager.py` and `inbox_manager.py`: logging setup, the Playwright login/session-cache flow, and `.auth/state.json` bootstrap are each implemented twice with no shared module.
 * **`inbox_manager.py` hard-codes `headless=False`** with no CLI flag, unlike `invitations_manager.py`'s `--headless` option.
 * **`ruff` `line-length = 1000`** (`pyproject.toml`) effectively disables line-length linting.
-* **Mixed dependency pinning** in `requirements.txt` — `pydantic-ai==1.0.0b1` is pinned to an exact beta version while most other dependencies are unpinned.
 
 ## Unenforced Rules
 

@@ -19,9 +19,9 @@ There is no frontend/backend split, no database, and no shared library — see "
 Run them directly, e.g.:
 
 ```shell
-python invitations_manager.py --num-to-process 10 [--record-eval-cases] [--headless]
-python inbox_manager.py --num-messages 20
-python evals.py
+uv run python invitations_manager.py --num-to-process 10 [--record-eval-cases] [--headless]
+uv run python inbox_manager.py --num-messages 20
+uv run python evals.py
 ```
 
 ## Path-scoped rules

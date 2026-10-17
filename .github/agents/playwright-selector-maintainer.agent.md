@@ -28,15 +28,15 @@ LinkedIn's live, frequently-changing DOM — the project's single biggest source
 3. **Live verification is the user's call, not yours**: this repo scrapes a real, credentialed LinkedIn
    session (`playwright/.auth/state.json`). Never initiate a live LinkedIn Playwright run yourself —
    propose the exact selector fix and ask the user to verify it (e.g. via
-   `python invitations_manager.py --num-to-process 1`), since only they should drive authenticated
+   `uv run python invitations_manager.py --num-to-process 1`), since only they should drive authenticated
    LinkedIn sessions.
 4. **Safe update workflow**: prefer *adding* a new selector to an existing fallback list over replacing
    an old one, so both old- and new-markup LinkedIn accounts keep working during rollout. Run
-   `ruff check --fix .` and `ruff format .` on anything you touch.
-5. **No regression suite exists for scraping**: say so plainly — `evals.py` only checks the
-   invitation-decision agent's judgment against `linkedin_invitation_cases.yaml`, not selectors or CLI
-   behavior. Do not claim a change is "tested" beyond a syntax/lint check unless the user has manually
-   verified it against a live session.
+   `uv run ruff check --fix .` and `uv run ruff format .` on anything you touch.
+5. **Use fixture tests without overstating them**: run `uv run pytest` for the selector tests under
+   `tests/playwright/`. They validate scraping behavior against static LinkedIn-like fixtures, not the
+   live site. Do not claim live compatibility unless the user has manually verified it against an
+   authenticated session.
 
 ## Output format
 

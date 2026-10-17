@@ -12,8 +12,8 @@ This is a **single-stack Python project** (no frontend/backend split) with a sup
 
 | File | Role |
 |---|---|
-| `invitations_manager.py` | Main entry point (`python invitations_manager.py --num-to-process N [--record-eval-cases] [--headless]`). Logs into LinkedIn via Playwright, scrapes invitation cards, runs a `pydantic_ai.Agent` to decide accept/ignore/undecided, executes the click, and can fall back to full-profile scraping when undecided. |
-| `inbox_manager.py` | Secondary entry point (`python inbox_manager.py --num-messages N`). Scrapes recent LinkedIn conversations, ranks each by urgency (1–10) via a second `Agent`, and opens the highest-priority thread. |
+| `invitations_manager.py` | Main entry point (`uv run python invitations_manager.py --num-to-process N [--record-eval-cases] [--headless]`). Logs into LinkedIn via Playwright, scrapes invitation cards, runs a `pydantic_ai.Agent` to decide accept/ignore/undecided, executes the click, and can fall back to full-profile scraping when undecided. |
+| `inbox_manager.py` | Secondary entry point (`uv run python inbox_manager.py --num-messages N`). Scrapes recent LinkedIn conversations, ranks each by urgency (1–10) via a second `Agent`, and opens the highest-priority thread. |
 | `evals.py` | Runs `pydantic_evals` regression tests against `linkedin_invitation_cases.yaml` using `CorrectDecisionEvaluator` + `IsInstance`. |
 
 ### Data Layer
@@ -27,9 +27,10 @@ No database — state is file-based:
 
 None (no Jinja/HTML) — prompts are inline Python f-strings/system prompts embedded directly in `invitations_manager.py` and `inbox_manager.py`.
 
-### Scripts
+### Dependency and command management
 
-None beyond the two CLIs above; no Makefile/task runner.
+Runtime and development dependencies are declared in `pyproject.toml`, locked in `uv.lock`, and installed
+with `uv sync --all-groups`. Commands run through `uv run`; there is no separate Makefile or task runner.
 
 ## 2. Infra Stack (Azure Developer CLI / Bicep)
 
@@ -48,7 +49,9 @@ None beyond the two CLIs above; no Makefile/task runner.
 
 - **Two inconsistent Azure OpenAI client setups**: `invitations_manager.py` uses `azure.identity.aio.AzureDeveloperCliCredential` + `openai/v1` base URL + `OpenAIChatModel`; `inbox_manager.py` uses sync `azure.identity.DefaultAzureCredential` + different base URL + deprecated `OpenAIModel`. Divergent auth/model classes = duplicated, drifting logic.
 - **Heavy DOM-scraping via brittle CSS selectors/aria-labels** (LinkedIn markup can change silently) — no abstraction layer or selector versioning; multiple selector fallback chains hard-coded inline.
-- **No automated tests** beyond `evals.py` (LLM-output evals, not unit tests) — no pytest suite for scraping logic, YAML parsing, or CLI argument handling.
+- **Limited automated coverage** — fixture-based Playwright tests cover selected scraping behavior, and
+  `evals.py` checks invitation-decision output quality, but session/login flow, YAML writes, and CLI
+  behavior remain untested.
 - **Broad `except Exception`** swallowing in `inbox_manager.py` (e.g., `get_logged_in_user_name`, message extraction) — silently degrades to "Unknown" without surfacing root cause.
 - **`headless=False` hard-coded** in `inbox_manager.py` (no CLI flag), inconsistent with `invitations_manager.py`'s `--headless` option.
 - **Duplicated boilerplate** between the two scripts (logging setup, Playwright login/session flow, `.auth/state.json` bootstrap) — no shared utility module.
