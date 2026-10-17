@@ -182,6 +182,61 @@ def test_primary_write_allowance_is_per_context():
     assert first.init_scripts == [] and second.init_scripts == []
 
 
+MESSAGING_API = "https://www.linkedin.com/voyager/api"
+ARCHIVE_WRITE_URL = f"{MESSAGING_API}/voyagerMessagingGraphQL/graphql?action=archive"
+DESTRUCTIVE_WRITE_URLS = [
+    f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=deleteConversation",
+    f"{MESSAGING_API}/voyagerMessagingDashMessengerMessages?action=recall",
+    f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=addCategory",
+    f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=unarchive",
+    f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=reportSpam",
+]
+INCIDENTAL_WRITE_URLS = [
+    f"{MESSAGING_API}/messaging/dash/presenceStatuses",
+    f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=markAllMessagesAsSeen",
+    f"{MESSAGING_API}/voyagerMessagingDashMessengerMessages?action=sendDeliveryAcknowledgement",
+    f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=typing",
+    f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=markRead",
+]
+
+
+@pytest.mark.parametrize("label", ["send", "archive"])
+@pytest.mark.parametrize("url", DESTRUCTIVE_WRITE_URLS)
+def test_message_approval_blocks_unlisted_messaging_writes(label, url):
+    context = FakeContext()
+    run(linkedin_guard.install_linkedin_write_guard(context, ApprovedAction("message", label)))
+    reset_blocked_writes()
+
+    assert context.post(url) == "aborted"
+    assert len(blocked_writes()) == 1
+    reset_blocked_writes()
+
+
+@pytest.mark.parametrize("label", ["send", "archive"])
+@pytest.mark.parametrize("url", INCIDENTAL_WRITE_URLS)
+def test_message_approval_allows_incidental_writes(label, url):
+    context = FakeContext()
+    run(linkedin_guard.install_linkedin_write_guard(context, ApprovedAction("message", label)))
+
+    assert [context.post(url), context.post(url)] == ["allowed", "allowed"]
+
+
+def test_send_approval_blocks_archive_and_keeps_its_one_send():
+    context = FakeContext()
+    run(linkedin_guard.install_linkedin_write_guard(context, ApprovedAction("message", "send")))
+
+    assert [context.post(ARCHIVE_WRITE_URL), context.post(SEND_URL), context.post(SEND_URL)] == ["aborted", "allowed", "aborted"]
+    reset_blocked_writes()
+
+
+def test_archive_approval_blocks_send_and_keeps_its_one_archive():
+    context = FakeContext()
+    run(linkedin_guard.install_linkedin_write_guard(context, ApprovedAction("message", "archive")))
+
+    assert [context.post(SEND_URL), context.post(ARCHIVE_WRITE_URL), context.post(ARCHIVE_WRITE_URL)] == ["aborted", "allowed", "aborted"]
+    reset_blocked_writes()
+
+
 @pytest.mark.parametrize("approval", [None, ApprovedAction("invitation", "accept")])
 def test_unapproved_contexts_block_every_messaging_write(approval):
     context = FakeContext()

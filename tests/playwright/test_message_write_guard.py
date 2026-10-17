@@ -17,6 +17,10 @@ WRITE_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerM
 READ_URL = "https://www.linkedin.com/voyager/api/messaging/conversations"
 ARCHIVE_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingGraphQL/graphql?action=archive"
 READ_RECEIPT_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerConversations?action=markRead"
+DELETE_CONVERSATION_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerConversations?action=deleteConversation"
+RECALL_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=recall"
+PRESENCE_URL = "https://www.linkedin.com/voyager/api/messaging/dash/presenceStatuses"
+DELIVERY_ACK_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=sendDeliveryAcknowledgement"
 POST_JS = "url => fetch(url, {method: 'POST', body: '{}'}).then(() => 'ok', () => 'failed')"
 
 
@@ -167,6 +171,45 @@ def test_approved_context_blocks_any_second_primary_write():
         assert len(blocked_writes()) == 2
 
     run_scenario(scenario, approval=ApprovedAction("message", "archive"))
+
+
+def test_send_approval_blocks_delete_and_recall_writes():
+    async def scenario(page, hits):
+        results = [await page.evaluate(POST_JS, url) for url in [DELETE_CONVERSATION_URL, RECALL_URL]]
+        assert results == ["failed", "failed"]
+        assert hits == []
+        assert len(blocked_writes()) == 2
+
+    run_scenario(scenario, approval=ApprovedAction("message", "send"))
+
+
+def test_send_approval_blocks_archive_then_still_sends_once():
+    async def scenario(page, hits):
+        results = [await page.evaluate(POST_JS, url) for url in [ARCHIVE_URL, WRITE_URL]]
+        assert results == ["failed", "ok"]
+        assert hits == [f"POST {WRITE_URL}"]
+        assert len(blocked_writes()) == 1
+
+    run_scenario(scenario, approval=ApprovedAction("message", "send"))
+
+
+def test_archive_approval_blocks_send():
+    async def scenario(page, hits):
+        assert await page.evaluate(POST_JS, WRITE_URL) == "failed"
+        assert hits == []
+        assert len(blocked_writes()) == 1
+
+    run_scenario(scenario, approval=ApprovedAction("message", "archive"))
+
+
+def test_send_approval_allows_presence_and_delivery_acknowledgements():
+    async def scenario(page, hits):
+        results = [await page.evaluate(POST_JS, url) for url in [PRESENCE_URL, DELIVERY_ACK_URL, WRITE_URL, PRESENCE_URL]]
+        assert results == ["ok", "ok", "ok", "ok"]
+        assert len(hits) == 4
+        assert blocked_writes() == []
+
+    run_scenario(scenario, approval=ApprovedAction("message", "send"))
 
 
 def test_approved_send_context_still_refuses_destructive_clicks():

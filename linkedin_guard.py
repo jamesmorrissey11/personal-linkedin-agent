@@ -8,8 +8,9 @@ Layers implemented here (see issues #41 and #46):
 
 Scraping and sync contexts install the guard without an approval and stay fully guarded, so reading never
 marks anything read. An action context opened for one item James approved in Agent Inbox passes an
-`ApprovedAction`: a "message" approval lifts the composer guard, allows the incidental messaging writes
-(read receipts, presence), allows exactly one primary write (send or archive) per context, and unlocks
+`ApprovedAction`: a "message" approval lifts the composer guard and keeps the network layer default-deny,
+allowing only exactly one primary write for the approved label (send or archive) per context plus an explicit
+allow-list of incidental writes (read receipts, delivery acknowledgements, typing, presence). It unlocks
 only the approved control in `safe_click`. The LLM agents never act; only a human approval does.
 """
 
@@ -27,8 +28,16 @@ MESSAGING_PATH_PATTERN = re.compile(r"messag|messenger|conversation", re.IGNOREC
 DESTRUCTIVE_PATTERN = re.compile(r"(?<![a-z])(send|reply|delete|archive|report|block|leave|spam|recall|unsend)(?![a-z])", re.IGNORECASE)
 INTERACTIVE_TAGS = {"button", "a", "input"}
 MAX_TEXT_LENGTH_CHECKED = 40
-PRIMARY_WRITE_PATTERN = re.compile(r"createMessage|archive", re.I)
 MESSAGE_APPROVAL_LABELS = {"send", "archive"}
+# Provisional endpoint names; a later task confirms them against captured live traffic.
+PRIMARY_WRITE_PATTERNS = {
+    "send": re.compile(r"createMessage", re.IGNORECASE),
+    "archive": re.compile(r"(?<!un)archive", re.IGNORECASE),
+}
+INCIDENTAL_WRITE_PATTERN = re.compile(
+    r"presenceStatuses|markAllMessagesAsSeen|sendDeliveryAcknowledgement|typing|seenReceipt|markAsSeen|markRead|markAsRead",
+    re.IGNORECASE,
+)
 
 # JS run on an element to collect everything that describes what it does (never the content of message cards).
 ELEMENT_DESCRIPTOR_JS = """el => {
@@ -141,11 +150,20 @@ async def _guard_route(route) -> None:
         await route.fallback()
 
 
+def primary_write_label(url: str) -> str | None:
+    """Return "send" or "archive" when `url` is that primary messaging write, else None."""
+    for label, pattern in PRIMARY_WRITE_PATTERNS.items():
+        if pattern.search(url):
+            return label
+    return None
+
+
 async def install_linkedin_write_guard(context, approval: ApprovedAction | None = None) -> None:
     """Install the network kill switch and composer-input guard on a Playwright browser context.
 
-    With a "message" approval, messaging writes are allowed except that only one primary write (send or
-    archive) may pass per context; the composer guard is not installed.
+    With a "message" approval the composer guard is not installed and messaging writes stay default-deny:
+    only one primary write matching the approved label, plus incidental writes (presence, delivery
+    acknowledgements, typing, read receipts), may pass per context.
     """
     if approval is None or approval.scope != "message":
         await context.route(is_messaging_url, _guard_route)
@@ -157,13 +175,20 @@ async def install_linkedin_write_guard(context, approval: ApprovedAction | None 
     async def approved_route(route) -> None:
         nonlocal primary_writes
         request = route.request
-        if is_messaging_write(request.method, request.url) and PRIMARY_WRITE_PATTERN.search(request.url):
-            if primary_writes >= 1:
-                record_blocked("network", f"second primary write under {approval}: {request.method} {request.url}")
-                await route.abort("blockedbyclient")
-                return
+        if not is_messaging_write(request.method, request.url):
+            await route.fallback()
+            return
+        label = primary_write_label(request.url)
+        if label == approval.label and primary_writes == 0:
             primary_writes += 1
-        await route.fallback()
+            await route.fallback()
+            return
+        if label is None and INCIDENTAL_WRITE_PATTERN.search(request.url):
+            await route.fallback()
+            return
+        reason = "second primary write" if label == approval.label else "unapproved write"
+        record_blocked("network", f"{reason} under {approval}: {request.method} {request.url}")
+        await route.abort("blockedbyclient")
 
     await context.route(is_messaging_url, approved_route)
 
