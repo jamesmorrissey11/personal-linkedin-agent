@@ -57,6 +57,44 @@ class LoginRequiredError(RuntimeError):
     """The cached LinkedIn session expired and no human is available to log in."""
 
 
+class SetupError(RuntimeError):
+    """A setup problem the user can fix (server not running, backend unreachable, missing settings).
+
+    The CLI prints `cause` and `fix` on one line instead of a traceback.
+    """
+
+    def __init__(self, cause: str, fix: str):
+        super().__init__(f"{cause} {fix}")
+        self.cause = cause
+        self.fix = fix
+
+
+AGENT_INBOX_URL = "http://localhost:3000"
+
+
+def next_step(counts: "ReviewCounts", graph_label: str, command: str) -> str:
+    """The one thing to do after a run, shown at the end of every manual run."""
+    if counts.new:
+        return f"Next: review {counts.new} new {graph_label} item(s) in Agent Inbox ({AGENT_INBOX_URL}). Accept, Edit, or Ignore acts on LinkedIn right away."
+    if counts.cap_hit:
+        return f"Next: more may be waiting past the safety cap; run `uv run linkedin-agent {command}` again with a higher cap."
+    return f"Nothing new to review. Next: `uv run linkedin-agent {command}` again later, or let the 06:30 daily sync run."
+
+
+def check_url(url: str, cause: str, fix: str, timeout: float = 3.0) -> None:
+    """Raise SetupError when `url` doesn't answer; used to fail fast before opening LinkedIn."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(url, timeout=timeout):
+            return
+    except urllib.error.HTTPError:
+        return  # the server answered, which is all this check is for
+    except (OSError, ValueError) as error:
+        raise SetupError(cause, fix) from error
+
+
 class HealthCheckError(RuntimeError):
     """A scrape looked broken (e.g. zero cards), so the result can't be trusted and nothing is closed."""
 

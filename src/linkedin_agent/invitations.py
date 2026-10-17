@@ -17,10 +17,10 @@ from pydantic_ai import Agent, NativeOutput
 from linkedin_agent.linkedin.models import Invitation, InvitationAction, InvitationDecision
 from linkedin_agent.linkedin.pages import collect_invitation_profiles, get_invitation_cards, get_invitation_info, page_reports_no_invitations
 from linkedin_agent.linkedin.session import open_linkedin
-from linkedin_agent.llm import build_model, default_model_backend, model_settings
+from linkedin_agent.llm import build_model, check_backend, default_model_backend, model_settings
 from linkedin_agent.review.graphs import GRAPH_ID
-from linkedin_agent.review.queue import classify_review, enqueue_review, fetch_pending_reviews, find_pending_review, get_review_client, supersede_review
-from linkedin_agent.runtime import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts
+from linkedin_agent.review.queue import check_review_server, classify_review, enqueue_review, fetch_pending_reviews, find_pending_review, get_review_client, supersede_review
+from linkedin_agent.runtime import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts, next_step
 
 logger = logging.getLogger("invitations_manager")
 logger.setLevel(logging.INFO)
@@ -297,6 +297,7 @@ async def process_linkedin_invitations(num_to_process: int = 100, record_eval_ca
 
         if cleanup_stale:
             counts.superseded = await close_stale_invitations(review_client, page)
+            logger.info("Closed %d invitation review(s) already handled on LinkedIn.", counts.superseded)
             return counts
 
         results, counts = await propose_new_invitations(page, review_client, num_to_process, record_eval_cases, unattended)
@@ -308,6 +309,8 @@ async def process_linkedin_invitations(num_to_process: int = 100, record_eval_ca
             decision = invitation.decision
             outcome = decision.action.value if decision else "needs judgment (LLM failed)"
             logger.info(f"- [{outcome}] {invitation.name} ({invitation.job_title})\n  Profile: {invitation.profile}\n  Reason: {decision.reason if decision else 'n/a'}")
+        if not unattended:
+            logger.info(next_step(counts, "invitation", "invitations"))
     return counts
 
 
@@ -320,6 +323,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def run_command(args: argparse.Namespace) -> int:
-    configure(args.model_backend)
+    check_review_server()
+    backend = args.model_backend or default_model_backend()
+    configure(backend)
+    check_backend(backend)
     asyncio.run(process_linkedin_invitations(args.num_to_process, record_eval_cases=args.record_eval_cases, headless=args.headless, cleanup_stale=args.cleanup_stale))
     return 0

@@ -13,8 +13,8 @@ from logging.handlers import RotatingFileHandler
 from linkedin_agent import inbox, invitations
 from linkedin_agent.linkedin.guard import blocked_write_summary
 from linkedin_agent.review.graphs import GRAPH_ID, MESSAGE_GRAPH_ID
-from linkedin_agent.review.queue import get_review_client, recover_stuck_reviews, retire_legacy_reviews
-from linkedin_agent.runtime import HealthCheckError, LoginRequiredError, ReviewCounts, logs_dir, notify
+from linkedin_agent.review.queue import check_review_server, get_review_client, recover_stuck_reviews, retire_legacy_reviews
+from linkedin_agent.runtime import HealthCheckError, LoginRequiredError, ReviewCounts, SetupError, logs_dir, notify
 
 logger = logging.getLogger("daily_run")
 
@@ -115,6 +115,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 def run_command(args: argparse.Namespace) -> int:
     configure_file_logging()
-    invitations.configure(args.model_backend)
-    inbox.configure(args.model_backend)
+    try:
+        check_review_server()
+        invitations.configure(args.model_backend)
+        inbox.configure(args.model_backend)
+    except SetupError as error:
+        # Unattended: there's no terminal to read, so say it in the notification too.
+        logger.error("Setup problem: %s", error)
+        notify("LinkedIn agent: setup problem", f"{error.cause} {error.fix}")
+        return EXIT_HEALTH
     return asyncio.run(run(args.headless))
