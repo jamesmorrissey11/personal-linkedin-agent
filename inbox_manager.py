@@ -60,9 +60,17 @@ def build_azure_model() -> OpenAIModel:
         azure.identity.DefaultAzureCredential(),
         "https://cognitiveservices.azure.com/.default",
     )
+
+    async def async_token_provider() -> str:
+        # AsyncOpenAI expects an async callable for `api_key`, but `get_bearer_token_provider` returns a
+        # sync one here (this script intentionally uses a sync `azure.identity` credential, unlike
+        # `invitations_manager.py` - see `.github/instructions/python.instructions.md`). Wrap it rather
+        # than switching credential types.
+        return token_provider()
+
     azure_client = AsyncOpenAI(
         base_url=os.environ["AZURE_OPENAI_ENDPOINT"],
-        api_key=token_provider,
+        api_key=async_token_provider,
     )
     return OpenAIModel(os.environ["AZURE_OPENAI_CHAT_DEPLOYMENT"], provider=OpenAIProvider(openai_client=azure_client))
 
