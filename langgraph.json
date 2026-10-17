@@ -1,7 +1,8 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "invitation_review": "./review_graph.py:graph"
+    "invitation_review": "./review_graph.py:graph",
+    "message_review": "./review_graph.py:message_graph"
   },
   "env": ".env"
 }

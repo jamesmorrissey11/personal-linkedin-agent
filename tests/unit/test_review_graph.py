@@ -2,7 +2,7 @@ import pytest
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 
-from review_graph import build_interrupt, builder, decision_from_response
+from review_graph import build_interrupt, build_message_interrupt, builder, decision_from_response, message_builder, message_result_from_response
 
 STATE = {"name": "Ada", "profile": "https://www.linkedin.com/in/ada/", "job_title": "Engineer", "reason": "Unclear role"}
 
@@ -31,3 +31,39 @@ def test_graph_interrupts_then_resumes_with_decision(response_type):
 
     result = graph.invoke(Command(resume=[{"type": response_type, "args": None}]), config)
     assert result["decision"] == response_type
+
+
+MESSAGE_STATE = {
+    "sender_name": "Grace",
+    "conversation_url": "https://www.linkedin.com/messaging/thread/1/",
+    "urgency_score": 8,
+    "latest_message": "Can we talk Friday?",
+    "reason": "Direct question",
+    "suggested_reply": "Friday works!",
+}
+
+
+def test_message_interrupt_allows_accept_edit_ignore():
+    payload = build_message_interrupt(MESSAGE_STATE)
+    assert payload["config"] == {"allow_ignore": True, "allow_respond": False, "allow_edit": True, "allow_accept": True}
+    assert payload["action_request"]["args"] == {"suggested_reply": "Friday works!"}
+    assert "Can we talk Friday?" in payload["description"]
+
+
+def test_message_result_from_response():
+    assert message_result_from_response({"type": "accept", "args": None}, "Hi") == {"action": "reply", "reply": "Hi"}
+    edited = {"type": "edit", "args": {"action": "x", "args": {"suggested_reply": "Edited"}}}
+    assert message_result_from_response(edited, "Hi") == {"action": "reply", "reply": "Edited"}
+    assert message_result_from_response({"type": "ignore", "args": None}, "Hi") == {"action": "dismiss"}
+    with pytest.raises(ValueError):
+        message_result_from_response({"type": "response", "args": "x"}, "Hi")
+
+
+def test_message_graph_resumes_with_edited_reply():
+    graph = message_builder.compile(checkpointer=MemorySaver())
+    config = {"configurable": {"thread_id": "m1"}}
+    graph.invoke(MESSAGE_STATE, config)
+    edited = {"type": "edit", "args": {"action": "Reply to Grace?", "args": {"suggested_reply": "Friday at 3?"}}}
+    result = graph.invoke(Command(resume=[edited]), config)
+    assert result["action"] == "reply"
+    assert result["reply"] == "Friday at 3?"
