@@ -33,7 +33,7 @@ class FakeElement:
     [
         ("POST", "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage", True),
         ("DELETE", "https://www.linkedin.com/voyager/api/messaging/conversations/2-abc", True),
-        ("POST", "https://www.linkedin.com/voyager/api/voyagerMessagingGraphQL/graphql?action=archive", True),
+        ("POST", "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerConversations?action=addCategory", True),
         ("PUT", "https://www.linkedin.com/messaging/thread/2-abc/", True),
         ("GET", "https://www.linkedin.com/voyager/api/messaging/conversations", False),
         ("OPTIONS", "https://www.linkedin.com/voyager/api/messaging/conversations", False),
@@ -135,14 +135,15 @@ def test_summary_is_none_when_nothing_blocked():
 
 
 class FakeRequest:
-    def __init__(self, method, url):
+    def __init__(self, method, url, post_data=None):
         self.method = method
         self.url = url
+        self.post_data = post_data
 
 
 class FakeRoute:
-    def __init__(self, method, url):
-        self.request = FakeRequest(method, url)
+    def __init__(self, method, url, post_data=None):
+        self.request = FakeRequest(method, url, post_data)
         self.outcome = None
 
     async def abort(self, reason):
@@ -163,8 +164,10 @@ class FakeContext:
     async def add_init_script(self, script):
         self.init_scripts.append(script)
 
-    def post(self, url):
-        route = FakeRoute("POST", url)
+    def post(self, url, body=None):
+        if body is None and url == ARCHIVE_WRITE_URL:
+            body = ARCHIVE_BODY
+        route = FakeRoute("POST", url, body)
         run(self.handler(route))
         return route.outcome
 
@@ -183,11 +186,11 @@ def test_primary_write_allowance_is_per_context():
 
 
 MESSAGING_API = "https://www.linkedin.com/voyager/api"
-ARCHIVE_WRITE_URL = f"{MESSAGING_API}/voyagerMessagingGraphQL/graphql?action=archive"
+ARCHIVE_WRITE_URL = f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=addCategory"
+ARCHIVE_BODY = '{"conversationUrns":["urn:li:msg_conversation:(urn:li:fsd_profile:abc,2-xyz)"],"category":"ARCHIVE"}'
 DESTRUCTIVE_WRITE_URLS = [
     f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=deleteConversation",
     f"{MESSAGING_API}/voyagerMessagingDashMessengerMessages?action=recall",
-    f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=addCategory",
     f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=unarchive",
     f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=reportSpam",
 ]
@@ -234,6 +237,43 @@ def test_archive_approval_blocks_send_and_keeps_its_one_archive():
     run(linkedin_guard.install_linkedin_write_guard(context, ApprovedAction("message", "archive")))
 
     assert [context.post(SEND_URL), context.post(ARCHIVE_WRITE_URL), context.post(ARCHIVE_WRITE_URL)] == ["aborted", "allowed", "aborted"]
+    reset_blocked_writes()
+
+
+@pytest.mark.parametrize("body", [None, "{}", '{"category":"SPAM"}', '{"category":"archive"}', "not json"])
+def test_archive_approval_blocks_add_category_writes_that_are_not_archive(body):
+    context = FakeContext()
+    run(linkedin_guard.install_linkedin_write_guard(context, ApprovedAction("message", "archive")))
+    reset_blocked_writes()
+
+    assert context.post(ARCHIVE_WRITE_URL, body or "") == "aborted"
+    assert context.post(ARCHIVE_WRITE_URL) == "allowed"
+    reset_blocked_writes()
+
+
+@pytest.mark.parametrize(
+    ("url", "body", "expected"),
+    [
+        (SEND_URL, None, "send"),
+        (ARCHIVE_WRITE_URL, ARCHIVE_BODY, "archive"),
+        (ARCHIVE_WRITE_URL, '{"category":"SPAM"}', None),
+        (f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations?action=removeCategory", ARCHIVE_BODY, None),
+        (f"{MESSAGING_API}/voyagerMessagingDashMessengerMessages?action=createMessageDraft", None, None),
+    ],
+)
+def test_primary_write_label_uses_real_endpoints(url, body, expected):
+    assert linkedin_guard.primary_write_label(url, body) == expected
+
+
+@pytest.mark.parametrize("label", ["send", "archive"])
+def test_message_approval_allows_read_patch_but_not_other_patches(label):
+    context = FakeContext()
+    run(linkedin_guard.install_linkedin_write_guard(context, ApprovedAction("message", label)))
+    conversation_url = f"{MESSAGING_API}/voyagerMessagingDashMessengerConversations/urn%3Ali%3Amsg_conversation%3A2-xyz"
+    reset_blocked_writes()
+
+    assert context.post(conversation_url, '{"patch":{"$set":{"read":true}}}') == "allowed"
+    assert context.post(conversation_url, '{"patch":{"$set":{"read":true,"muted":true}}}') == "aborted"
     reset_blocked_writes()
 
 

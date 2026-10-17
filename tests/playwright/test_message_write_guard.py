@@ -15,13 +15,15 @@ from tests.playwright.helpers import FIXTURES_DIR
 PAGE_URL = "https://www.linkedin.com/messaging/"
 WRITE_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage"
 READ_URL = "https://www.linkedin.com/voyager/api/messaging/conversations"
-ARCHIVE_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingGraphQL/graphql?action=archive"
+ARCHIVE_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerConversations?action=addCategory"
 READ_RECEIPT_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerConversations?action=markRead"
 DELETE_CONVERSATION_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerConversations?action=deleteConversation"
 RECALL_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=recall"
 PRESENCE_URL = "https://www.linkedin.com/voyager/api/messaging/dash/presenceStatuses"
 DELIVERY_ACK_URL = "https://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=sendDeliveryAcknowledgement"
-POST_JS = "url => fetch(url, {method: 'POST', body: '{}'}).then(() => 'ok', () => 'failed')"
+# Archive requests carry their category in the body, exactly like LinkedIn's own.
+POST_JS = """url => fetch(url, {method: 'POST', body: url.includes('action=addCategory') ? '{"category":"ARCHIVE"}' : '{}'})
+    .then(() => 'ok', () => 'failed')"""
 
 
 def run_scenario(scenario, headless=True, approval=None):

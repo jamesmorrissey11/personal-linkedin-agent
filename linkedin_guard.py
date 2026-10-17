@@ -14,6 +14,7 @@ allow-list of incidental writes (read receipts, delivery acknowledgements, typin
 only the approved control in `safe_click`. The LLM agents never act; only a human approval does.
 """
 
+import json
 import logging
 import re
 import time
@@ -29,11 +30,12 @@ DESTRUCTIVE_PATTERN = re.compile(r"(?<![a-z])(send|reply|delete|archive|report|b
 INTERACTIVE_TAGS = {"button", "a", "input"}
 MAX_TEXT_LENGTH_CHECKED = 40
 MESSAGE_APPROVAL_LABELS = {"send", "archive"}
-# Provisional endpoint names; a later task confirms them against captured live traffic.
-PRIMARY_WRITE_PATTERNS = {
-    "send": re.compile(r"createMessage", re.IGNORECASE),
-    "archive": re.compile(r"(?<!un)archive", re.IGNORECASE),
-}
+# Confirmed against live LinkedIn traffic (2026-10-17): sending POSTs
+# voyagerMessagingDashMessengerMessages?action=createMessage, and archiving POSTs
+# voyagerMessagingDashMessengerConversations?action=addCategory with {"category": "ARCHIVE"} in the body
+# (the same action with any other category, e.g. spam, stays blocked).
+SEND_WRITE_PATTERN = re.compile(r"[?&]action=createMessage(?:&|$)", re.IGNORECASE)
+ADD_CATEGORY_WRITE_PATTERN = re.compile(r"[?&]action=addCategory(?:&|$)", re.IGNORECASE)
 INCIDENTAL_WRITE_PATTERN = re.compile(
     r"presenceStatuses|markAllMessagesAsSeen|sendDeliveryAcknowledgement|typing|seenReceipt|markAsSeen|markRead|markAsRead",
     re.IGNORECASE,
@@ -150,12 +152,29 @@ async def _guard_route(route) -> None:
         await route.fallback()
 
 
-def primary_write_label(url: str) -> str | None:
-    """Return "send" or "archive" when `url` is that primary messaging write, else None."""
-    for label, pattern in PRIMARY_WRITE_PATTERNS.items():
-        if pattern.search(url):
-            return label
+def _json_body(body: str | None) -> object:
+    try:
+        return json.loads(body or "")
+    except ValueError:
+        return None
+
+
+def primary_write_label(url: str, body: str | None = None) -> str | None:
+    """Return "send" or "archive" when the request is that primary messaging write, else None."""
+    if SEND_WRITE_PATTERN.search(url):
+        return "send"
+    if ADD_CATEGORY_WRITE_PATTERN.search(url):
+        payload = _json_body(body)
+        if isinstance(payload, dict) and payload.get("category") == "ARCHIVE":
+            return "archive"
     return None
+
+
+def is_incidental_write(url: str, body: str | None = None) -> bool:
+    """Presence, typing, delivery acknowledgements, and read receipts: writes that never change a conversation."""
+    if INCIDENTAL_WRITE_PATTERN.search(url):
+        return True
+    return _json_body(body) == {"patch": {"$set": {"read": True}}}
 
 
 async def install_linkedin_write_guard(context, approval: ApprovedAction | None = None) -> None:
@@ -178,12 +197,13 @@ async def install_linkedin_write_guard(context, approval: ApprovedAction | None 
         if not is_messaging_write(request.method, request.url):
             await route.fallback()
             return
-        label = primary_write_label(request.url)
+        body = request.post_data
+        label = primary_write_label(request.url, body)
         if label == approval.label and primary_writes == 0:
             primary_writes += 1
             await route.fallback()
             return
-        if label is None and INCIDENTAL_WRITE_PATTERN.search(request.url):
+        if label is None and is_incidental_write(request.url, body):
             await route.fallback()
             return
         reason = "second primary write" if label == approval.label else "unapproved write"
