@@ -1,5 +1,8 @@
 # Copilot Instructions for `personal-linkedin-agent`
 
+> Universal agent entry point: [`AGENTS.md`](../AGENTS.md). Don't start implementation without a
+> corresponding GitHub Issue; capture the originating prompt in the issue.
+
 ## What this is
 
 A single-stack Python project: an AI-powered LinkedIn automation agent. An LLM (Azure OpenAI via
