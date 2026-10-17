@@ -71,3 +71,54 @@ builder.add_edge(START, "review")
 builder.add_edge("review", END)
 
 graph = builder.compile()
+
+
+MESSAGE_GRAPH_ID = "message_review"
+
+
+class MessageReviewState(TypedDict, total=False):
+    sender_name: str
+    conversation_url: str
+    urgency_score: int
+    latest_message: str
+    reason: str
+    suggested_reply: str
+    action: Literal["reply", "dismiss"]
+    reply: str
+
+
+def build_message_interrupt(state: MessageReviewState) -> HumanInterrupt:
+    return HumanInterrupt(
+        action_request=ActionRequest(
+            action=f"Reply to {state['sender_name']}?",
+            args={"suggested_reply": state.get("suggested_reply", "")},
+        ),
+        # Accept uses the suggested reply, Edit lets you change it, Ignore dismisses the conversation.
+        config=HumanInterruptConfig(allow_ignore=True, allow_respond=False, allow_edit=True, allow_accept=True),
+        description=(f"**Urgency:** {state.get('urgency_score', '?')}/10\n\n**Latest message:** {state.get('latest_message', '')}\n\n**Why:** {state.get('reason', 'n/a')}\n\n[Open conversation]({state['conversation_url']})"),
+    )
+
+
+def message_result_from_response(response: dict[str, Any], suggested_reply: str) -> MessageReviewState:
+    response_type = response.get("type")
+    if response_type == "accept":
+        return {"action": "reply", "reply": suggested_reply}
+    if response_type == "edit":
+        args = response.get("args") or {}
+        return {"action": "reply", "reply": str((args.get("args") or {}).get("suggested_reply", suggested_reply))}
+    if response_type == "ignore":
+        return {"action": "dismiss"}
+    raise ValueError(f"Unsupported Agent Inbox response type: {response_type!r}")
+
+
+def review_message(state: MessageReviewState) -> MessageReviewState:
+    responses = interrupt([build_message_interrupt(state)])
+    return message_result_from_response(responses[0], state.get("suggested_reply", ""))
+
+
+message_builder = StateGraph(MessageReviewState)
+message_builder.add_node("review_message", review_message)
+message_builder.add_edge(START, "review_message")
+message_builder.add_edge("review_message", END)
+
+message_graph = message_builder.compile()

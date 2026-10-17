@@ -23,7 +23,8 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from rich.logging import RichHandler
 
-from review_queue import enqueue_review, fetch_resolved_reviews, get_review_client
+from review_graph import GRAPH_ID
+from review_queue import enqueue_review, fetch_resolved_reviews, get_review_client, mark_applied
 
 # Setup logging with rich
 logging.basicConfig(level=logging.WARNING, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(show_level=True)])
@@ -336,9 +337,9 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
     processed_count = 0
 
     review_client = get_review_client() if (send_to_inbox or apply_inbox_decisions) else None
-    human_decisions: dict[str, str] = {}
+    human_decisions: dict[str, dict] = {}
     if apply_inbox_decisions:
-        human_decisions = await fetch_resolved_reviews(review_client)
+        human_decisions = await fetch_resolved_reviews(review_client, GRAPH_ID)
         logger.info("Found %d resolved Agent Inbox review(s).", len(human_decisions))
 
     # Set up the storage state for Playwright
@@ -416,8 +417,10 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
                     continue
 
                 if invitation.profile in human_decisions:
-                    human_decision = InvitationDecision(action=InvitationAction(human_decisions[invitation.profile]), reason="Resolved by human via Agent Inbox")
+                    human_decision = InvitationDecision(action=InvitationAction(human_decisions[invitation.profile]["values"]["decision"]), reason="Resolved by human via Agent Inbox")
                     invitation.decision = await execute_action(page, card, human_decision)
+                    if invitation.decision.action != InvitationAction.UNDECIDED:
+                        await mark_applied(review_client, human_decisions[invitation.profile]["thread_id"])
                     logger.info(f"Applied Agent Inbox decision for {invitation.name}: {human_decision.action}")
                     results.append(invitation)
                     processed_profiles.add(invitation.profile)
@@ -447,7 +450,7 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
                     logger.info(f"Agent's final decision for {invitation.name}: {decision.action} - {getattr(decision, 'reason', '')}")
                     if send_to_inbox and decision.action == InvitationAction.UNDECIDED:
                         try:
-                            if await enqueue_review(review_client, invitation.name, invitation.profile, invitation.job_title, decision.reason):
+                            if await enqueue_review(review_client, GRAPH_ID, invitation.profile, {"name": invitation.name, "profile": invitation.profile, "job_title": invitation.job_title, "reason": decision.reason}):
                                 logger.info(f"Sent {invitation.name} to Agent Inbox for human review.")
                         except Exception as e:
                             logger.warning(f"Could not send {invitation.name} to Agent Inbox: {e!r}")

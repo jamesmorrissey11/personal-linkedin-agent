@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import os
 
@@ -15,6 +16,9 @@ from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from rich.logging import RichHandler
+
+from review_graph import MESSAGE_GRAPH_ID
+from review_queue import enqueue_review, fetch_resolved_reviews, get_review_client, mark_applied
 
 # Setup logging with rich
 logging.basicConfig(level=logging.WARNING, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(show_level=True)])
@@ -313,10 +317,48 @@ Consider the flow of conversation and whether the last message seems to be waiti
     return ranked_messages
 
 
-async def manage_linkedin_inbox(num_messages: int = 20) -> list[InboxMessage]:
+async def apply_message_reviews(context, review_client) -> int:
+    """Open conversations the human approved in Agent Inbox and print the approved reply. Never sends anything."""
+    resolved = await fetch_resolved_reviews(review_client, MESSAGE_GRAPH_ID)
+    logger.info("Found %d resolved message review(s).", len(resolved))
+    for resolved_review in resolved.values():
+        values = resolved_review["values"]
+        if values.get("action") == "reply":
+            logger.info(f"\nApproved reply for {values.get('sender_name', 'conversation')}:\n{values.get('reply', '')}\n{values.get('conversation_url', '')}")
+            reply_page = await context.new_page()
+            await reply_page.goto(values["conversation_url"])
+        await mark_applied(review_client, resolved_review["thread_id"])
+    return len(resolved)
+
+
+async def send_messages_to_inbox(review_client, messages: list[InboxMessage], min_urgency: int) -> int:
+    sent = 0
+    for msg in messages:
+        if not msg.ranking or msg.ranking.urgency_score < min_urgency or not msg.conversation_url:
+            continue
+        latest = msg.last_three_messages[-1].content if msg.last_three_messages else ""
+        # Key on the latest message so a new message in the same conversation is queued again.
+        key = f"{msg.conversation_url}|{hashlib.sha1(latest.encode()).hexdigest()[:12]}"
+        input_data = {
+            "sender_name": msg.sender_name,
+            "conversation_url": msg.conversation_url,
+            "urgency_score": msg.ranking.urgency_score,
+            "latest_message": latest,
+            "reason": msg.ranking.reason,
+            "suggested_reply": msg.ranking.suggested_reply,
+        }
+        try:
+            if await enqueue_review(review_client, MESSAGE_GRAPH_ID, key, input_data):
+                sent += 1
+        except Exception as e:
+            logger.warning(f"Could not send {msg.sender_name} to Agent Inbox: {e!r}")
+    return sent
+
+
+async def manage_linkedin_inbox(num_messages: int = 20, send_to_inbox: bool = False, apply_inbox_decisions: bool = False, min_urgency: int = 4) -> list[InboxMessage]:
     """Main function to manage LinkedIn inbox and rank top messages requiring replies."""
     logger.info("Starting LinkedIn inbox management...")
-
+    review_client = get_review_client() if (send_to_inbox or apply_inbox_decisions) else None
     # Set up the storage state for Playwright
     os.makedirs("playwright/.auth", exist_ok=True)
     if not os.path.exists("playwright/.auth/state.json"):
@@ -338,6 +380,12 @@ async def manage_linkedin_inbox(num_messages: int = 20) -> list[InboxMessage]:
             logger.info("Login detected. Saving storage state...")
             await context.storage_state(path="playwright/.auth/state.json")
 
+        if apply_inbox_decisions:
+            await apply_message_reviews(context, review_client)
+            await asyncio.to_thread(input, "Press Enter to close the browser...")
+            await browser.close()
+            return []
+
         # Get the logged-in user's name
         logged_in_user = await get_logged_in_user_name(page)
         logger.info(f"Managing inbox for user: {logged_in_user}")
@@ -351,6 +399,10 @@ async def manage_linkedin_inbox(num_messages: int = 20) -> list[InboxMessage]:
 
         # Rank messages for reply priority
         ranked_messages = await rank_messages_for_reply(messages, message_ranking_agent)
+
+        if send_to_inbox:
+            sent = await send_messages_to_inbox(review_client, ranked_messages, min_urgency)
+            logger.info(f"Sent {sent} conversation(s) with urgency >= {min_urgency} to Agent Inbox.")
 
         # Generate report
         logger.info("\n=== LinkedIn Inbox Management Report ===")
@@ -402,9 +454,12 @@ if __name__ == "__main__":
         default=None,
         help=f"Model backend to use (default: MODEL_BACKEND env var, currently {MODEL_BACKEND!r}).",
     )
+    parser.add_argument("--send-to-inbox", action="store_true", help="Send conversations at or above --min-urgency to Agent Inbox for human review (requires `langgraph dev`).")
+    parser.add_argument("--apply-inbox-decisions", action="store_true", help="Open conversations a human approved in Agent Inbox and print the approved reply (nothing is sent).")
+    parser.add_argument("--min-urgency", type=int, default=4, help="Minimum urgency score (1-10) to send to Agent Inbox (default: 4).")
     args = parser.parse_args()
 
     if args.model_backend and args.model_backend != MODEL_BACKEND:
         model = build_model(args.model_backend)
 
-    asyncio.run(manage_linkedin_inbox(args.num_messages))
+    asyncio.run(manage_linkedin_inbox(args.num_messages, send_to_inbox=args.send_to_inbox, apply_inbox_decisions=args.apply_inbox_decisions, min_urgency=args.min_urgency))
