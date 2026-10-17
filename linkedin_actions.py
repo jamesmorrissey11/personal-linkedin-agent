@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from linkedin_guard import ApprovedAction, safe_click
-from linkedin_pages import UNKNOWN_AUTHORS, ConversationMessage, LinkedInBusyError, collect_invitation_profiles, extract_conversation_messages, get_invitation_cards, get_invitation_info, get_logged_in_user_name, open_linkedin
+from linkedin_pages import UNKNOWN_AUTHORS, ConversationMessage, LinkedInBusyError, collect_invitation_profiles, extract_conversation_messages, get_invitation_cards, get_invitation_info, get_logged_in_user_name, open_linkedin, page_reports_no_invitations
 from unattended import LoginRequiredError
 
 COMPOSER_SELECTORS = [
@@ -38,6 +38,10 @@ ARCHIVED_INDICATOR_SELECTORS = [
 CONVERSATION_MESSAGE_SELECTOR = "li.msg-s-message-list__event"
 SEND_WRITE_MARKER = "action=createMessage"
 ARCHIVE_WRITE_MARKER = "action=addCategory"
+# Confirmed against live traffic (2026-10-17): accept/ignore POST a server-driven-UI request
+# (sduiid=com.linkedin.sdui.requests.mynetwork.addaInvitationAction); the voyager endpoint is the older UI's.
+INVITATION_WRITE_MARKERS = ("InvitationAction", "voyagerRelationshipsDashInvitations")
+INVITATION_LIST_SETTLE_MS = 3000
 
 LOCK_TIMEOUT_SECONDS = 300
 CONVERSATION_LOAD_TIMEOUT_MS = 20000
@@ -113,12 +117,16 @@ async def _first_visible(page, selectors):
     return None
 
 
-async def click_invitation_button(card, decision: Literal["accept", "ignore"]) -> bool:
+async def _invitation_button(card, decision: Literal["accept", "ignore"]):
     button = await card.query_selector(f"button[aria-label*='{decision.title()}']")
     if not button:
         logger.warning("%s button not found on the invitation card.", decision.title())
-        return False
-    return await safe_click(button, approval=ApprovedAction("invitation", decision))
+    return button
+
+
+async def click_invitation_button(card, decision: Literal["accept", "ignore"]) -> bool:
+    button = await _invitation_button(card, decision)
+    return button is not None and await safe_click(button, approval=ApprovedAction("invitation", decision))
 
 
 # LinkedIn's composer renders each line as <p>, blank lines as <p><br></p>, and repeated spaces as &nbsp;.
@@ -146,24 +154,39 @@ async def _composer_text(composer) -> str:
     return await composer.evaluate(COMPOSER_TEXT_JS)
 
 
-async def _click_and_confirm_write(page, element, approval: ApprovedAction, url_marker: str) -> bool | None:
+async def _write_accepted(response) -> bool:
+    """A 2xx response, and for LinkedIn's server-driven UI endpoints, one that reports no errors."""
+    if not response.ok:
+        return False
+    if "/rsc-action/" not in response.url:
+        return True
+    try:
+        body = await response.text()
+    except Exception:
+        return False
+    return '"errors":[]' in body and '"errors":[{' not in body
+
+
+async def _click_and_confirm_write(page, element, approval: ApprovedAction, url_markers: str | tuple[str, ...]) -> bool | None:
     """Click `element` and wait for LinkedIn to answer the resulting write.
 
     Returns True when LinkedIn accepted the write, False when the click was refused or the write was
     blocked/rejected, and None when no matching request was seen before the timeout.
     """
-    outcome: list[bool] = []
+    markers = (url_markers,) if isinstance(url_markers, str) else url_markers
+    responses: list = []
+    failed: list[bool] = []
 
     def matches(request) -> bool:
-        return request.method == "POST" and url_marker in request.url
+        return request.method == "POST" and any(marker in request.url for marker in markers)
 
     def on_response(response) -> None:
         if matches(response.request):
-            outcome.append(response.ok)
+            responses.append(response)
 
     def on_request_failed(request) -> None:
         if matches(request):
-            outcome.append(False)
+            failed.append(True)
 
     page.on("response", on_response)
     page.on("requestfailed", on_request_failed)
@@ -171,8 +194,10 @@ async def _click_and_confirm_write(page, element, approval: ApprovedAction, url_
         if not await safe_click(element, approval=approval):
             return False
         for _ in range(WRITE_CONFIRM_TIMEOUT_MS // 250):
-            if outcome:
-                return outcome[0]
+            if responses:
+                return await _write_accepted(responses[0])
+            if failed:
+                return False
             await page.wait_for_timeout(250)
         return None
     finally:
@@ -257,11 +282,30 @@ async def _find_invitation_card(page, profile_url: str):
     return None
 
 
+async def _open_invitation_manager(page) -> None:
+    await page.goto(INVITATION_MANAGER_URL)
+    await page.wait_for_load_state("load")
+    await page.wait_for_timeout(INVITATION_LIST_SETTLE_MS)
+
+
+async def _invitation_still_pending(page, profile_url: str) -> bool | None:
+    """Reload the invitation list: True if the invitation is still there, False if gone, None if the scan was incomplete."""
+    await _open_invitation_manager(page)
+    if await _find_invitation_card(page, profile_url) is not None:
+        return True
+    profiles, complete = await collect_invitation_profiles(page)
+    if any(same_profile(profile, profile_url) for profile in profiles):
+        return True
+    if not profiles and not await page_reports_no_invitations(page):
+        return None
+    return False if complete else None
+
+
 async def perform_invitation_action(profile_url: str, decision: Literal["accept", "ignore"]) -> ActionResult:
     approval = ApprovedAction("invitation", decision)
     try:
         async with open_linkedin(headless=True, unattended=True, approval=approval, lock_timeout=LOCK_TIMEOUT_SECONDS) as (_, page):
-            await page.goto(INVITATION_MANAGER_URL)
+            await _open_invitation_manager(page)
             card = await _find_invitation_card(page, profile_url)
             if card is None:
                 profiles, complete = await collect_invitation_profiles(page)
@@ -270,13 +314,20 @@ async def perform_invitation_action(profile_url: str, decision: Literal["accept"
                     logger.info("Invitation action item=%s action=%s result=%s", profile_url, decision, result.outcome or result.error)
                     return result
                 card = await _find_invitation_card(page, profile_url)
-            if card is None or not await click_invitation_button(card, decision):
-                return ActionResult(None, "Couldn't complete the invitation action. Check LinkedIn before trying again.")
-            await page.wait_for_timeout(500)
-            if await _find_invitation_card(page, profile_url) is not None:
-                return ActionResult(None, "Couldn't confirm the invitation action. Check LinkedIn before trying again.")
-            result = ActionResult("accepted" if decision == "accept" else "ignored")
-            logger.info("Invitation action item=%s action=%s result=%s", profile_url, decision, result.outcome)
+            button = await _invitation_button(card, decision) if card is not None else None
+            if button is None:
+                return ActionResult(None, "Couldn't find the invitation's button on LinkedIn; nothing was changed. Try again.")
+            # LinkedIn hides the card before its server answers, so only the server's response and a fresh
+            # reload count as proof; closing the browser early silently dropped the action.
+            accepted = await _click_and_confirm_write(page, button, approval, INVITATION_WRITE_MARKERS)
+            pending = None if accepted is False else await _invitation_still_pending(page, profile_url)
+            if accepted is False:
+                result = ActionResult(None, "LinkedIn didn't accept the invitation action. Check LinkedIn before trying again.")
+            elif pending is False or (pending is None and accepted is True):
+                result = ActionResult("accepted" if decision == "accept" else "ignored")
+            else:
+                result = ActionResult(None, "Couldn't confirm the invitation action on LinkedIn. Check LinkedIn before trying again.")
+            logger.info("Invitation action item=%s action=%s result=%s", profile_url, decision, result.outcome or result.error)
             return result
     except LoginRequiredError:
         return ActionResult(None, "LinkedIn login expired. Log in with a visible browser, then try again.")

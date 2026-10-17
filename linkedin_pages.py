@@ -24,6 +24,8 @@ logger.setLevel(logging.INFO)
 
 MAX_SCANNED_INVITATIONS = int(os.environ.get("MAX_SCANNED_INVITATIONS", "500"))
 NO_PENDING_INVITATIONS_TEXT = "no pending invitations"
+# Fallback chain: LinkedIn's current invitation manager says "No new invitations" (seen 2026-10-17).
+NO_PENDING_INVITATIONS_TEXTS = (NO_PENDING_INVITATIONS_TEXT, "no new invitations")
 INVITATION_CARD_SELECTORS = [
     "div[role='listitem']:has(button[aria-label^='Ignore an invitation to connect from ']):has(a[href*='/in/'])",
     "main div[componentkey^='auto-component-']:has(button[aria-label*='Accept'])",
@@ -237,7 +239,8 @@ async def get_invitation_cards(page: Page) -> list[ElementHandle]:
 
 
 async def page_reports_no_invitations(page: Page) -> bool:
-    return NO_PENDING_INVITATIONS_TEXT in (await page.content()).lower()
+    content = (await page.content()).lower()
+    return any(text in content for text in NO_PENDING_INVITATIONS_TEXTS)
 
 
 async def collect_invitation_profiles(page: Page) -> tuple[set[str], bool]:

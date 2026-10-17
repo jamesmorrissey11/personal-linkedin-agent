@@ -7,6 +7,7 @@ from playwright.async_api import async_playwright
 import linkedin_actions
 from linkedin_actions import ARCHIVE_MENU_ITEM_SELECTORS, ARCHIVED_INDICATOR_SELECTORS, COMPOSER_SELECTORS, CONVERSATION_MENU_SELECTORS, SEND_BUTTON_SELECTORS, _composer_text, archive_conversation, conversation_is_archived, send_reply
 from linkedin_guard import ApprovedAction, install_linkedin_write_guard
+from linkedin_pages import page_reports_no_invitations
 from tests.async_helpers import run_async_test
 from tests.playwright.helpers import FIXTURES_DIR
 
@@ -303,6 +304,110 @@ def test_conversation_is_archived_opens_the_thread_menu(label, expected):
                 page = await context.new_page()
                 await page.set_content(HIDDEN_MENU_HTML.replace("__LABEL__", label))
                 return await conversation_is_archived(page)
+            finally:
+                await browser.close()
+
+    assert run_async_test(runner) is expected
+
+
+INVITATION_ACTION_URL = "https://www.linkedin.com/flagship-web/rsc-action/actions/server-request?sduiid=com.linkedin.sdui.requests.mynetwork.addaInvitationAction"
+SAM_PROFILE = "https://www.linkedin.com/in/sam-example/"
+SDUI_OK = '1:[]\n0:{"states":[],"response":{"$type":"proto.sdui.responses.ServerRequestResponse","errors":[],"isRetryable":false}}\n'
+SDUI_ERROR = '1:[]\n0:{"states":[],"response":{"$type":"proto.sdui.responses.ServerRequestResponse","errors":[{"message":"failed"}],"isRetryable":true}}\n'
+
+
+def invitation_manager_html(pending: bool) -> str:
+    # Like LinkedIn's live page, the card is hidden as soon as a button is clicked, before the server answers.
+    card = f"""<div role="listitem"><a href="{SAM_PROFILE}"><strong>Sam Example</strong></a><p>Recruiter</p>
+        <button aria-label="Accept Sam Example's invitation">Accept</button>
+        <button aria-label="Ignore an invitation to connect from Sam Example">Ignore</button></div>"""
+    script = f"""<script>
+        for (const button of document.querySelectorAll("button")) {{
+            button.addEventListener("click", () => {{
+                button.closest("[role='listitem']").remove();
+                fetch({json.dumps(INVITATION_ACTION_URL)}, {{method: "POST", body: "{{}}"}}).catch(() => {{}});
+            }});
+        }}
+    </script>"""
+    return f"<!doctype html><html><body><main>{card if pending else '<p>No pending invitations</p>'}</main>{script}</body></html>"
+
+
+def run_invitation_action(monkeypatch, decision, server):
+    """`server` answers the action request: 'applied', 'rejected', or 'dropped' (answers OK but never applies it)."""
+    state = {"pending": True, "hits": []}
+
+    @asynccontextmanager
+    async def fake_open_linkedin(headless, unattended, approval=None, lock_timeout=0):
+        async def fake_linkedin(route):
+            request = route.request
+            if request.method == "POST" and "InvitationAction" in request.url:
+                state["hits"].append(request.url)
+                if server == "applied":
+                    state["pending"] = False
+                await route.fulfill(status=200, body=SDUI_ERROR if server == "rejected" else SDUI_OK)
+            elif request.method == "GET" and request.url == linkedin_actions.INVITATION_MANAGER_URL:
+                await route.fulfill(status=200, content_type="text/html", body=invitation_manager_html(state["pending"]))
+            else:
+                await route.fulfill(status=200, body="{}")
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            try:
+                context = await browser.new_context()
+                await context.route("https://www.linkedin.com/**", fake_linkedin)
+                await install_linkedin_write_guard(context, approval)
+                yield context, await context.new_page()
+            finally:
+                await browser.close()
+
+    monkeypatch.setattr(linkedin_actions, "open_linkedin", fake_open_linkedin)
+    monkeypatch.setattr(linkedin_actions, "INVITATION_LIST_SETTLE_MS", 200)
+    monkeypatch.setattr(linkedin_actions, "WRITE_CONFIRM_TIMEOUT_MS", 2000)
+    result = run_async_test(lambda: linkedin_actions.perform_invitation_action(SAM_PROFILE, decision))
+    return result, state
+
+
+@pytest.mark.parametrize(("decision", "outcome"), [("ignore", "ignored"), ("accept", "accepted")])
+def test_invitation_action_succeeds_only_once_linkedin_applied_it(monkeypatch, decision, outcome):
+    result, state = run_invitation_action(monkeypatch, decision, "applied")
+
+    assert (result.outcome, result.error) == (outcome, None)
+    assert len(state["hits"]) == 1
+
+
+def test_invitation_action_reports_failure_when_linkedin_rejects_it(monkeypatch):
+    result, state = run_invitation_action(monkeypatch, "ignore", "rejected")
+
+    assert result.outcome is None
+    assert result.error == "LinkedIn didn't accept the invitation action. Check LinkedIn before trying again."
+    assert len(state["hits"]) == 1
+
+
+def test_invitation_action_reports_failure_when_the_invitation_is_still_pending(monkeypatch):
+    # The card vanishes on click, but a reload still shows the invitation: the old code called this a success.
+    result, state = run_invitation_action(monkeypatch, "ignore", "dropped")
+
+    assert result.outcome is None
+    assert result.error == "Couldn't confirm the invitation action on LinkedIn. Check LinkedIn before trying again."
+    assert len(state["hits"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("<main><p>Focused (0)</p><p>No new invitations</p></main>", True),
+        ("<main><p>No pending invitations</p></main>", True),
+        ("<main><p>Suggestions for you</p></main>", False),
+    ],
+)
+def test_page_reports_no_invitations_matches_current_and_legacy_wording(body, expected):
+    async def runner():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page()
+                await page.set_content(body)
+                return await page_reports_no_invitations(page)
             finally:
                 await browser.close()
 

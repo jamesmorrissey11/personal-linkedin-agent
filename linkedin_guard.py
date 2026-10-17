@@ -197,7 +197,10 @@ async def install_linkedin_write_guard(context, approval: ApprovedAction | None 
         if not is_messaging_write(request.method, request.url):
             await route.fallback()
             return
-        body = request.post_data
+        try:
+            body = request.post_data
+        except UnicodeDecodeError:
+            body = None
         label = primary_write_label(request.url, body)
         if label == approval.label and primary_writes == 0:
             primary_writes += 1
