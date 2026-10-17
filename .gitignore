@@ -156,3 +156,6 @@ playwright-report/
 
 # Personal editor settings (machine-specific, not portable to other contributors)
 .vscode/
+
+# LangGraph dev server state
+.langgraph_api/

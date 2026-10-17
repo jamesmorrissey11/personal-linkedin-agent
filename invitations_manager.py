@@ -23,6 +23,8 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from rich.logging import RichHandler
 
+from review_queue import enqueue_review, fetch_resolved_reviews, get_review_client
+
 # Setup logging with rich
 logging.basicConfig(level=logging.WARNING, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(show_level=True)])
 logger = logging.getLogger("invitations_manager")
@@ -328,10 +330,16 @@ async def ignore_newsletter_invitations(page: Page) -> int:
     return ignored_count
 
 
-async def process_linkedin_invitations(num_to_process: int, record_eval_cases: bool = False, headless: bool = False):
+async def process_linkedin_invitations(num_to_process: int, record_eval_cases: bool = False, headless: bool = False, send_to_inbox: bool = False, apply_inbox_decisions: bool = False):
     logger.info("Starting LinkedIn invitation processing...")
     results = []
     processed_count = 0
+
+    review_client = get_review_client() if (send_to_inbox or apply_inbox_decisions) else None
+    human_decisions: dict[str, str] = {}
+    if apply_inbox_decisions:
+        human_decisions = await fetch_resolved_reviews(review_client)
+        logger.info("Found %d resolved Agent Inbox review(s).", len(human_decisions))
 
     # Set up the storage state for Playwright
     os.makedirs("playwright/.auth", exist_ok=True)
@@ -407,6 +415,17 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
                 if invitation.profile in processed_profiles:
                     continue
 
+                if invitation.profile in human_decisions:
+                    human_decision = InvitationDecision(action=InvitationAction(human_decisions[invitation.profile]), reason="Resolved by human via Agent Inbox")
+                    invitation.decision = await execute_action(page, card, human_decision)
+                    logger.info(f"Applied Agent Inbox decision for {invitation.name}: {human_decision.action}")
+                    results.append(invitation)
+                    processed_profiles.add(invitation.profile)
+                    processed_count += 1
+                    new_card_processed_this_pass = True
+                    await asyncio.sleep(1)
+                    continue
+
                 decision_message = f"Name: {invitation.name}, Job Title: {invitation.job_title}, Profile Link: {invitation.profile}, Connection Info: {invitation.mutual_connections}."
 
                 decision = await get_decision(invitation.name, decision_message, record_eval_cases)
@@ -426,6 +445,12 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
                     if detailed_decision is not None:
                         decision = await execute_action(page, card, detailed_decision)
                     logger.info(f"Agent's final decision for {invitation.name}: {decision.action} - {getattr(decision, 'reason', '')}")
+                    if send_to_inbox and decision.action == InvitationAction.UNDECIDED:
+                        try:
+                            if await enqueue_review(review_client, invitation.name, invitation.profile, invitation.job_title, decision.reason):
+                                logger.info(f"Sent {invitation.name} to Agent Inbox for human review.")
+                        except Exception as e:
+                            logger.warning(f"Could not send {invitation.name} to Agent Inbox: {e!r}")
 
                 invitation.decision = decision
                 results.append(invitation)
@@ -484,6 +509,8 @@ if __name__ == "__main__":
     parser.add_argument("--num-to-process", type=int, default=10, help="Number of LinkedIn invitations to process (default: 10).")
     parser.add_argument("--record-eval-cases", action="store_true", help="Record eval cases to YAML file.")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode.")
+    parser.add_argument("--send-to-inbox", action="store_true", help="Send invitations the agent is still undecided about to Agent Inbox (requires `langgraph dev`).")
+    parser.add_argument("--apply-inbox-decisions", action="store_true", help="Apply accept/ignore decisions a human made in Agent Inbox.")
     parser.add_argument(
         "--model-backend",
         choices=["ollama", "azure", "fallback"],
@@ -495,4 +522,4 @@ if __name__ == "__main__":
     if args.model_backend and args.model_backend != MODEL_BACKEND:
         agent = build_agent(args.model_backend)
 
-    asyncio.run(process_linkedin_invitations(args.num_to_process, record_eval_cases=args.record_eval_cases, headless=args.headless))
+    asyncio.run(process_linkedin_invitations(args.num_to_process, record_eval_cases=args.record_eval_cases, headless=args.headless, send_to_inbox=args.send_to_inbox, apply_inbox_decisions=args.apply_inbox_decisions))
