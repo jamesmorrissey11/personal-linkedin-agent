@@ -26,14 +26,18 @@ description: Conventions, client-setup pitfalls, lint/format, and test invocatio
 - Preserve CSS-selector/`aria-label` scraping fallback chains (e.g. `INVITATION_CARD_SELECTORS` in
   `invitations_manager.py`) when editing scraping logic; don't replace multi-selector fallbacks with a
   single selector, since LinkedIn markup changes can silently break scraping with no compile-time signal.
-- Lint/format with `ruff` (`pyproject.toml`, `target-version = "py310"`): run `ruff check --fix .` and
-  `ruff format .`. Note `line-length = 1000` effectively disables line-length checks — don't rely on ruff
+- Manage dependencies and commands with `uv`: runtime and development dependencies live in
+  `pyproject.toml`, exact versions are committed in `uv.lock`, and repository commands should run via
+  `uv run`.
+- Lint/format with `ruff` (`pyproject.toml`, `target-version = "py310"`): run
+  `uv run ruff check --fix .` and `uv run ruff format .`. Note `line-length = 1000` effectively disables line-length checks — don't rely on ruff
   to catch overly long lines.
 - No CI workflow currently runs lint/pre-commit on PRs (`.github/workflows/` only has `azure-dev.yaml`,
   which provisions Azure infra on push to `main`, and `template-validation.yaml`, which is manual/
-  `workflow_dispatch`-only) — run `ruff check --fix .` and `ruff format .` yourself before committing, and
-  run `pre-commit install` if working across multiple commits.
-- There is no unit test suite. Validate changes to the invitation-decision agent by running
-  `python evals.py`, which checks `CorrectDecisionEvaluator`/`IsInstance` against
-  `linkedin_invitation_cases.yaml`; there's no mechanism to run a single case in isolation short of
-  trimming the YAML file temporarily. `evals.py` does not cover scraping or CLI logic.
+  `workflow_dispatch`-only) — run `uv run ruff check --fix .` and `uv run ruff format .` yourself before
+  committing, and run `uv run pre-commit install` if working across multiple commits.
+- Run `uv run pytest` for the fixture-based Playwright selector tests. Validate changes to the
+  invitation-decision agent separately with `uv run python evals.py`, which checks
+  `CorrectDecisionEvaluator`/`IsInstance` against `linkedin_invitation_cases.yaml`; there's no mechanism
+  to run a single eval case in isolation short of trimming the YAML file temporarily. `evals.py` does
+  not cover scraping or CLI logic.

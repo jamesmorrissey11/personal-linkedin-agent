@@ -51,7 +51,7 @@ A related option is VS Code Dev Containers, which will open the project in your 
 
 1. Make sure the following tools are installed:
 
-    * [Python 3.10+](https://www.python.org/downloads/)
+    * [uv](https://docs.astral.sh/uv/getting-started/installation/)
     * Git
 
 2. Clone the repository:
@@ -61,23 +61,19 @@ A related option is VS Code Dev Containers, which will open the project in your 
     cd personal-linkedin-agent
     ```
 
-3. Set up a virtual environment:
+3. Create the virtual environment and install runtime and development dependencies:
 
     ```shell
-    python -m venv venv
-    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    uv sync --all-groups
     ```
 
-4. Install the requirements:
+    `uv` installs a compatible Python 3.10+ interpreter when needed and manages the project's `.venv`
+    automatically, so manual activation is not required.
+
+4. Install the Playwright browser binaries (required once per environment; the Python package alone does not include them):
 
     ```shell
-    pip install -r requirements.txt
-    ```
-
-5. Install the Playwright browser binaries (required once per environment; the `playwright` pip package alone does not include them):
-
-    ```shell
-    playwright install chromium
+    uv run playwright install chromium
     ```
 
 
@@ -143,8 +139,8 @@ Azure setup at all as long as Ollama is installed and running locally.
     | `fallback` | Tries Ollama first, and falls back to Azure OpenAI if the local model call fails (e.g. Ollama isn't running). **Still requires Azure credentials to be configured** (as in `azure` mode above) since both models are constructed at startup. |
 
     ```shell
-    python invitations_manager.py --model-backend ollama
-    python inbox_manager.py --model-backend fallback
+    uv run python invitations_manager.py --model-backend ollama
+    uv run python inbox_manager.py --model-backend fallback
     ```
 
    To change the default without passing a flag every time, set in `.env`:
@@ -157,7 +153,7 @@ Azure setup at all as long as Ollama is installed and running locally.
 
 **Known caveat:** Gemma 3's structured-output reliability through Ollama's OpenAI-compatible API is not
 as consistent as larger frontier models — in local testing against `linkedin_invitation_cases.yaml`
-(via `python evals.py`), correctness scores varied between 80–100% across four separate runs with
+(via `uv run python evals.py`), correctness scores varied between 80–100% across four separate runs with
 `gemma3:latest` (4B), with no malformed/unparseable outputs observed in any run. Validate against your own
 eval cases before relying on the `ollama` or `fallback` backend for unattended runs. See
 [`docs/reports/local-model-serving-for-gemma3.md`](docs/reports/local-model-serving-for-gemma3.md) for the
@@ -168,7 +164,7 @@ full research behind this choice (framework comparison, benchmarks, licensing).
 You can run the LinkedIn agent by executing the `invitations_manager.py` script. The agent will process LinkedIn invitations based on the decision logic defined in the code.
 
 ```shell
-python invitations_manager.py --num-to-process 10
+uv run python invitations_manager.py --num-to-process 10
 ```
 
 Available flags:
@@ -185,7 +181,7 @@ On first run (or whenever the saved session expires), a browser window opens to 
 `inbox_manager.py` is a separate script that scans your recent LinkedIn conversations, uses an LLM to score each thread's reply urgency (1-10), and opens the highest-priority conversation.
 
 ```shell
-python inbox_manager.py --num-messages 20
+uv run python inbox_manager.py --num-messages 20
 ```
 
 Available flags:
@@ -204,7 +200,7 @@ This project includes evaluations using Pydantic-AI evals to measure the agent's
 `evals.py` imports the `agent` object directly from `invitations_manager.py`, so it evaluates whichever backend `MODEL_BACKEND` resolves to at import time (`ollama` by default — see [Configuring Ollama Models](#configuring-ollama-models)). To evaluate against Azure OpenAI instead, set `MODEL_BACKEND=azure` (or `fallback`) before running:
 
 ```shell
-MODEL_BACKEND=azure python evals.py
+MODEL_BACKEND=azure uv run python evals.py
 ```
 
 Recorded/appended cases (via `invitations_manager.py --record-eval-cases`) include a `metadata.model_name` field identifying which model actually produced each decision (useful when running in `fallback` mode, since the local model may have failed over to Azure for a given call).

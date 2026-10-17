@@ -26,9 +26,8 @@ need to "explore the running app," drive the Playwright MCP server against the l
    open the matching fixture(s) under `tests/playwright/fixtures/`, take a snapshot, and confirm that
    exact element or value is present. If no fixture covers the change, report that as a gap instead of
    skipping the check.
-3. **Run the tests.** Run `.venv/bin/ruff check .`, `.venv/bin/ruff format --check .`, and
-   `.venv/bin/python -m pytest` (or the plain `ruff`/`python3` equivalents if no `.venv` exists). Report
-   the exit codes and a summary of failures, not just "tests ran."
+3. **Run the tests.** Run `uv run ruff check .`, `uv run ruff format --check .`, and
+   `uv run pytest`. Report the exit codes and a summary of failures, not just "tests ran."
 4. **Review the diff.** Run `git diff` (or `git diff main...HEAD`) against the base branch and check it
    against the plan from step 1: does every planned change appear, and does anything appear that
    wasn't planned?

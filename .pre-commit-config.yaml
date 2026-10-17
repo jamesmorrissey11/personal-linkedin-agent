@@ -4,13 +4,19 @@ repos:
     hooks:
     -   id: check-yaml
     -   id: end-of-file-fixer
-        exclude: ^tests/snapshots
+        exclude: ^(tests/snapshots|\.github/skills/make-repo-contribution/)
     -   id: trailing-whitespace
--   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.1.0
+-   repo: local
     hooks:
-        # Run the linter.
-        - id: ruff
-          args: [ --fix ]
-        # Run the formatter.
-        - id: ruff-format
+    -   id: ruff
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+    -   id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true

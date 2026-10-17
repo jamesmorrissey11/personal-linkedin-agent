@@ -1,3 +1,30 @@
+[project]
+name = "personal-linkedin-agent"
+version = "0.1.0"
+description = "AI-powered LinkedIn invitation and inbox automation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp",
+    "azure-identity",
+    "dotenv-azd",
+    "openai>=1.108.1",
+    "playwright",
+    "pydantic-ai==1.107.6",
+    "pydantic-evals",
+    "python-dotenv",
+    "pyyaml",
+    "rich",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "pytest",
+    "pytest-playwright",
+    "ruff",
+]
+
 [tool.ruff]
 line-length = 1000
 target-version = "py310"
