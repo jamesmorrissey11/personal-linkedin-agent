@@ -2,13 +2,11 @@ import asyncio
 import hashlib
 import logging
 import os
-from contextlib import asynccontextmanager
-from urllib.parse import urlparse
 
 import azure.identity
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import BaseModel
 from pydantic_ai import Agent, NativeOutput
@@ -20,10 +18,19 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from rich.logging import RichHandler
 
-from linkedin_guard import blocked_write_summary, install_linkedin_write_guard, safe_click
+from linkedin_guard import safe_click
+from linkedin_pages import (  # noqa: F401  (unused names are re-exported for existing callers)
+    UNKNOWN_AUTHORS,
+    ConversationMessage,
+    extract_conversation_messages,
+    get_logged_in_user_name,
+    is_linkedin_conversation_url,
+    latest_message_is_from_user,
+    open_linkedin,
+)
 from review_graph import MESSAGE_GRAPH_ID
 from review_queue import classify_review, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_review, get_review_client, mark_applied, supersede_review
-from unattended import KNOWN_STREAK_STOP, HealthCheckError, LoginRequiredError, ReviewCounts
+from unattended import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts
 
 # Setup logging with rich
 logging.basicConfig(level=logging.WARNING, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(show_level=True)])
@@ -123,12 +130,6 @@ class MessageRanking(BaseModel):
     suggested_reply: str
 
 
-class ConversationMessage(BaseModel):
-    author: str
-    content: str
-    timestamp: str
-
-
 class InboxMessage(BaseModel):
     sender_name: str
     last_three_messages: list[ConversationMessage]
@@ -136,53 +137,6 @@ class InboxMessage(BaseModel):
     ranking: MessageRanking | None = None
     known: str | None = None  # run-report bucket when an existing review already covers this message
     from_user: bool = False  # True only when the latest message's author exactly matches the logged-in user
-
-
-def is_linkedin_conversation_url(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    parsed = urlparse(value)
-    return parsed.scheme == "https" and parsed.hostname in {"linkedin.com", "www.linkedin.com"} and parsed.path.startswith("/messaging/")
-
-
-async def get_logged_in_user_name(page: Page) -> str:
-    """Extract the logged-in user's name from LinkedIn."""
-    try:
-        # Try to get the user's name from the profile button/dropdown
-        profile_button = await page.query_selector("button[aria-label*='View profile']")
-        if profile_button:
-            # Get the aria-label which often contains the user's name
-            aria_label = await profile_button.get_attribute("aria-label")
-            if aria_label and "View profile for" in aria_label:
-                name = aria_label.replace("View profile for", "").strip()
-                if name:
-                    return name
-
-        # Alternative: try to get name from the "Me" dropdown
-        me_button = await page.query_selector("button[aria-label='Open profile menu']")
-        if me_button:
-            if await safe_click(me_button):
-                await page.wait_for_timeout(1000)
-
-            # Look for the name in the dropdown
-            name_element = await page.query_selector(".profile-rail-card__actor-link")
-            if name_element:
-                name = await name_element.inner_text()
-                if name:
-                    return name.strip()
-
-        # Fallback: try to get from top navigation
-        nav_name = await page.query_selector(".global-nav__me-photo")
-        if nav_name:
-            alt_text = await nav_name.get_attribute("alt")
-            if alt_text:
-                return alt_text.strip()
-
-        return "Unknown User"
-
-    except Exception as e:
-        logger.warning(f"Could not extract logged-in user name: {e}")
-        return "Unknown User"
 
 
 def create_message_ranking_agent(logged_in_user: str):
@@ -213,17 +167,6 @@ For each message, provide:
     )
 
 
-UNKNOWN_AUTHORS = {"", "unknown", "unknown user"}
-
-
-def latest_message_is_from_user(messages: list[ConversationMessage], logged_in_user: str) -> bool:
-    """True only when the latest author exactly matches the user; any ambiguity returns False so the item is kept."""
-    if not messages or logged_in_user.strip().casefold() in UNKNOWN_AUTHORS:
-        return False
-    author = messages[-1].author.strip().casefold()
-    return author not in UNKNOWN_AUTHORS and author == logged_in_user.strip().casefold()
-
-
 def message_key(conversation_url: str, latest_message: str) -> str:
     # Key on the latest message so a new message in the same conversation is queued again.
     return f"{conversation_url}|{hashlib.sha1(latest_message.encode()).hexdigest()[:12]}"
@@ -231,45 +174,6 @@ def message_key(conversation_url: str, latest_message: str) -> str:
 
 def conversation_url_from_key(key: str) -> str:
     return key.rsplit("|", 1)[0]
-
-
-async def extract_conversation_messages(page: Page, sender_name: str) -> list[ConversationMessage]:
-    """Extract the last three messages of the open conversation."""
-    last_three_messages: list[ConversationMessage] = []
-    try:
-        message_elements = await page.query_selector_all("li.msg-s-message-list__event")
-        # LinkedIn only prints the author name on the first message of a consecutive group, so carry it forward.
-        current_author = "Unknown"
-        authored: list[tuple[str, object]] = []
-        for msg_element in message_elements:
-            author_element = await msg_element.query_selector(".msg-s-message-group__name")
-            if not author_element:
-                author_element = await msg_element.query_selector("a .msg-s-message-group__profile-link")
-            if author_element:
-                name = (await author_element.inner_text()).strip()
-                if name:
-                    current_author = name
-            authored.append((current_author, msg_element))
-
-        for author, msg_element in authored[-3:]:
-            try:
-                content_element = await msg_element.query_selector("p.msg-s-event-listitem__body")
-                content = await content_element.inner_text() if content_element else "No content"
-
-                timestamp_element = await msg_element.query_selector("time.msg-s-message-group__timestamp")
-                if not timestamp_element:
-                    timestamp_element = await msg_element.query_selector("time.msg-s-message-list__time-heading")
-                timestamp = await timestamp_element.inner_text() if timestamp_element else "Unknown time"
-
-                last_three_messages.append(ConversationMessage(author=author, content=content.strip(), timestamp=timestamp.strip()))
-            except Exception as e:
-                logger.warning(f"Error extracting individual message: {e}")
-                continue
-        logger.info(f"Extracted {len(last_three_messages)} messages for {sender_name}")
-    except Exception as e:
-        logger.warning(f"Could not extract messages for {sender_name}: {e}")
-        last_three_messages.append(ConversationMessage(author=sender_name, content="Could not extract message content", timestamp="Unknown"))
-    return last_three_messages
 
 
 async def get_inbox_messages(page: Page, num_messages: int = 100, logged_in_user: str = "Unknown User", known_check=None) -> tuple[list[InboxMessage], bool]:
@@ -489,37 +393,9 @@ async def send_messages_to_inbox(review_client, messages: list[InboxMessage], mi
     return counts
 
 
-@asynccontextmanager
-async def linkedin_session(headless: bool, unattended: bool):
-    """Yield (context, page) for a logged-in LinkedIn session.
-
-    When unattended (or headless) an expired session raises LoginRequiredError instead of waiting for a human.
-    """
-    os.makedirs("playwright/.auth", exist_ok=True)
-    if not os.path.exists("playwright/.auth/state.json"):
-        with open("playwright/.auth/state.json", "w") as f:
-            f.write("{}")
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=headless)
-        try:
-            context = await browser.new_context(storage_state="playwright/.auth/state.json")
-            await install_linkedin_write_guard(context)
-            page = await context.new_page()
-            await page.goto("https://www.linkedin.com/feed")
-            if not page.url.startswith("https://www.linkedin.com/feed"):
-                if headless or unattended:
-                    raise LoginRequiredError("LinkedIn session expired; log in again with a visible browser.")
-                logger.info("User is not logged in. Please log in manually...")
-                await page.goto("https://www.linkedin.com/login")
-                await page.wait_for_url("https://www.linkedin.com/feed/**", timeout=120000)
-                logger.info("Login detected. Saving storage state...")
-                await context.storage_state(path="playwright/.auth/state.json")
-            yield context, page
-        finally:
-            if summary := blocked_write_summary():
-                logger.warning(summary)
-            await browser.close()
+def linkedin_session(headless: bool, unattended: bool):
+    """Yield (context, page) for a logged-in LinkedIn session; see `linkedin_pages.open_linkedin`."""
+    return open_linkedin(headless, unattended)
 
 
 async def manage_linkedin_inbox(

@@ -3,6 +3,7 @@ import pytest
 import daily_run
 import inbox_manager
 import invitations_manager
+import linkedin_pages
 from inbox_manager import ConversationMessage, InboxMessage
 from invitations_manager import Invitation, InvitationAction, InvitationDecision
 from review_graph import decision_from_response, message_result_from_response
@@ -123,8 +124,9 @@ def invitation_page(monkeypatch):
     async def no_sleep(_):
         return None
 
-    monkeypatch.setattr(invitations_manager, "get_invitation_cards", fake_cards)
-    monkeypatch.setattr(invitations_manager, "get_invitation_info", fake_info)
+    for module in (invitations_manager, linkedin_pages):
+        monkeypatch.setattr(module, "get_invitation_cards", fake_cards)
+        monkeypatch.setattr(module, "get_invitation_info", fake_info)
     monkeypatch.setattr(invitations_manager.asyncio, "sleep", no_sleep)
 
 
