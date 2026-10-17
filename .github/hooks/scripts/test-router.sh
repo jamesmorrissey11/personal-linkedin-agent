@@ -25,7 +25,7 @@ stack_for_file() {
     *.py|pyproject.toml|requirements.txt|requirements-dev.txt)
       echo python
       ;;
-    infra/*|azure.yaml|.github/workflows/azure-dev.yaml)
+    deploy/azure/*|.github/workflows/azure-dev.yaml)
       echo infra
       ;;
   esac
@@ -104,29 +104,29 @@ run_infra_checks() {
   output=$(
     {
       if command -v az >/dev/null 2>&1; then
-        echo "+ az bicep build --file infra/main.bicep --stdout"
-        az bicep build --file infra/main.bicep --stdout >/dev/null
+        echo "+ az bicep build --file deploy/azure/infra/main.bicep --stdout"
+        az bicep build --file deploy/azure/infra/main.bicep --stdout >/dev/null
         bicep_status=$?
       else
-        echo "Azure CLI is unavailable; infra/main.bicep could not be compiled."
+        echo "Azure CLI is unavailable; deploy/azure/infra/main.bicep could not be compiled."
         bicep_status=1
       fi
 
       echo
-      echo "+ jq empty infra/main.parameters.json"
-      jq empty infra/main.parameters.json
+      echo "+ jq empty deploy/azure/infra/main.parameters.json"
+      jq empty deploy/azure/infra/main.parameters.json
       parameters_status=$?
 
       echo
-      echo "+ bash -n infra/write_dot_env.sh"
-      bash -n infra/write_dot_env.sh
+      echo "+ bash -n deploy/azure/infra/write_dot_env.sh"
+      bash -n deploy/azure/infra/write_dot_env.sh
       shell_status=$?
 
       echo
       if command -v pwsh >/dev/null 2>&1; then
-        echo "+ PowerShell syntax check: infra/write_dot_env.ps1"
+        echo "+ PowerShell syntax check: deploy/azure/infra/write_dot_env.ps1"
         pwsh -NoProfile -NonInteractive -Command \
-          "[void][scriptblock]::Create((Get-Content -Raw 'infra/write_dot_env.ps1'))"
+          "[void][scriptblock]::Create((Get-Content -Raw 'deploy/azure/infra/write_dot_env.ps1'))"
         powershell_status=$?
       else
         echo "PowerShell syntax check skipped because pwsh is unavailable."

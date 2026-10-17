@@ -1,6 +1,6 @@
 """LangGraph graph that asks a human (via Agent Inbox) to resolve an undecided LinkedIn invitation.
 
-Served by `uv run langgraph dev` (see langgraph.json) and rendered by the self-hosted UI in agent-inbox/.
+Served by `uv run linkedin-agent server` (see deploy/langgraph.json) and rendered by the self-hosted UI in deploy/agent-inbox/.
 """
 
 from __future__ import annotations

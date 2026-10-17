@@ -1,0 +1,7 @@
+{
+  "source": {"kind": "uv", "root": ".."},
+  "graphs": {
+    "invitation_review": "linkedin_agent.review.graphs:graph",
+    "message_review": "linkedin_agent.review.graphs:message_graph"
+  }
+}

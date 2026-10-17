@@ -71,7 +71,7 @@ def test_open_linkedin_passes_approval_to_the_guard(tmp_path, monkeypatch):
     async def fake_install(context, approval=None):
         installed.append(approval)
 
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LINKEDIN_AGENT_HOME", str(tmp_path))
     monkeypatch.setattr(session, "async_playwright", FakePlaywright)
     monkeypatch.setattr(session, "install_linkedin_write_guard", fake_install)
     approval = ApprovedAction("message", "send")
