@@ -50,6 +50,15 @@ automatically for matching files — don't duplicate them here:
   `.github/agents/playwright-selector-maintainer.agent.md` for an example of scoping an agent's tools to
   what its task actually needs).
 
+## Agentic-Agile workflow
+
+- Every work request needs a GitHub Issue (use the `agentic-story` template, which includes
+  scope, file ownership, and acceptance criteria) before implementation starts.
+- Preserve the originating human prompt in the issue's "Originating Prompt" section.
+- Don't close, implement, or modify issues labeled `sample`.
+- PRs use `.github/pull_request_template.md` and link the issue with `Closes #N`.
+- CI (`.github/workflows/ci.yaml`) runs ruff and pytest on PRs; `evals.py` is run manually.
+
 ## Maintaining this file
 
 Re-run `/init` after major restructuring or framework changes (e.g. adding a shared module, replacing

@@ -8,8 +8,6 @@
 
 ### Language-Specific Conventions
 
-
-
 **Primary language:** Python (>=3.10)
 
 | Convention | Rule |
@@ -31,8 +29,6 @@
 
 ### Formatting Tools
 
-<!-- List the formatters and linters your project uses. -->
-
 - **Formatter:** ruff format
 - **Linter:** ruff
 - **Config files:** `pyproject.toml`, `.pre-commit-config.yaml`
@@ -49,8 +45,6 @@
 - Remove commented-out code. Use version control, not comments, for history.
 
 ### Doc Comment Format
-
-<!-- Adapt to your language's conventions. -->
 
 ```
 /**
@@ -176,10 +170,9 @@ When working with AI coding agents, these conventions improve output quality:
 
 ## 6. Hard Bans
 
-<!-- List things that should never appear in your codebase. -->
-
 - No credentials or secrets in source code.
 - No `TODO` comments without a linked issue.
 - No suppressed linter warnings without a justifying comment.
 - No wildcard imports (import only what you use).
-- [Add your project-specific bans here]
+- No committed LinkedIn session state (`playwright/.auth/`) or `.env` files.
+- No replacing multi-selector scraping fallbacks with a single selector.
