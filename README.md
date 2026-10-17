@@ -11,6 +11,7 @@ This repository provides an AI-powered agent for managing personal LinkedIn acco
     - [VS Code Dev Containers](#vs-code-dev-containers)
     - [Local environment](#local-environment)
   - [Configuring Azure AI models](#configuring-azure-ai-models)
+  - [Configuring OpenAI models](#configuring-openai-models)
   - [Configuring Ollama Models](#configuring-ollama-models)
   - [Running the invitation manager](#running-the-invitation-manager)
   - [Running the inbox manager](#running-the-inbox-manager)
@@ -110,6 +111,26 @@ This project uses Azure OpenAI and includes infrastructure as code (IaC) to prov
     azd down
     ```
 
+## Configuring OpenAI models
+
+Both manager scripts can use the standard OpenAI API directly. Add these values to `.env`:
+
+```shell
+MODEL_BACKEND=openai
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-4.1-mini
+```
+
+`OPENAI_MODEL` is optional and defaults to `gpt-4.1-mini`. The API key is required whenever
+`MODEL_BACKEND=openai` or `--model-backend openai` is selected.
+
+You can select OpenAI for an individual run without changing `MODEL_BACKEND`:
+
+```shell
+uv run python invitations_manager.py --model-backend openai
+uv run python inbox_manager.py --model-backend openai
+```
+
 ## Configuring Ollama Models
 
 Both agent scripts can run against a local [Ollama](https://ollama.com) model instead of (or as a
@@ -135,12 +156,13 @@ Azure setup at all as long as Ollama is installed and running locally.
     | Value | Behavior |
     |---|---|
     | `ollama` (default) | Uses the local Ollama model only. No Azure credentials required. |
+    | `openai` | Uses the standard OpenAI API with `OPENAI_API_KEY` and `OPENAI_MODEL`. |
     | `azure` | Uses Azure OpenAI only, exactly as configured in [Configuring Azure AI models](#configuring-azure-ai-models). |
     | `fallback` | Tries Ollama first, and falls back to Azure OpenAI if the local model call fails (e.g. Ollama isn't running). **Still requires Azure credentials to be configured** (as in `azure` mode above) since both models are constructed at startup. |
 
     ```shell
     uv run python invitations_manager.py --model-backend ollama
-    uv run python inbox_manager.py --model-backend fallback
+    uv run python inbox_manager.py --model-backend openai
     ```
 
    To change the default without passing a flag every time, set in `.env`:
@@ -184,7 +206,7 @@ Available flags:
 * `--record-eval-cases`: append each processed invitation as a new case to `linkedin_invitation_cases.yaml`, for later use with `evals.py`.
 * `--headless`: run the browser without a visible window.
 * `--apply-inbox-decisions`: apply accept/ignore decisions a human already made in Agent Inbox.
-* `--model-backend` (`ollama` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring Ollama Models](#configuring-ollama-models).
+* `--model-backend` (`ollama` | `openai` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring OpenAI models](#configuring-openai-models) and [Configuring Ollama Models](#configuring-ollama-models).
 
 On first run (or whenever the saved session expires), a browser window opens to `linkedin.com/login` and waits for you to log in manually; the resulting session is cached to `playwright/.auth/state.json` so future runs skip the login step.
 
@@ -216,7 +238,7 @@ Available flags:
 * `--num-messages` (default `20`): number of recent conversations to analyze.
 * `--min-urgency` (default `4`): minimum urgency score (1-10) for an actionable reply proposal to be queued in Agent Inbox.
 * `--apply-inbox-decisions`: skip ranking; open conversations approved in Agent Inbox and print the approved reply. Nothing is sent.
-* `--model-backend` (`ollama` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring Ollama Models](#configuring-ollama-models).
+* `--model-backend` (`ollama` | `openai` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring OpenAI models](#configuring-openai-models) and [Configuring Ollama Models](#configuring-ollama-models).
 
 It reuses the same `playwright/.auth/state.json` login session as the invitation manager. Unlike `invitations_manager.py`, it does not currently support `--headless`.
 
@@ -226,9 +248,10 @@ It reuses the same `playwright/.auth/state.json` login session as the invitation
 
 This project includes evaluations using Pydantic-AI evals to measure the agent's performance. You can run the evaluations by executing the `evals.py` script.
 
-`evals.py` imports the `agent` object directly from `invitations_manager.py`, so it evaluates whichever backend `MODEL_BACKEND` resolves to at import time (`ollama` by default — see [Configuring Ollama Models](#configuring-ollama-models)). To evaluate against Azure OpenAI instead, set `MODEL_BACKEND=azure` (or `fallback`) before running:
+`evals.py` imports the `agent` object directly from `invitations_manager.py`, so it evaluates whichever backend `MODEL_BACKEND` resolves to at import time (`ollama` by default — see [Configuring Ollama Models](#configuring-ollama-models)). To evaluate against OpenAI or Azure OpenAI instead, set the corresponding backend before running:
 
 ```shell
+MODEL_BACKEND=openai uv run python evals.py
 MODEL_BACKEND=azure uv run python evals.py
 ```
 
@@ -238,7 +261,7 @@ Recorded/appended cases (via `invitations_manager.py --record-eval-cases`) inclu
 
 On average, each LinkedIn invitation processed by the agent requires approximately 200 tokens. If the agent decides it needs to open the full profile page to gather more information, it requires an additional 400 tokens on average.
 
-Azure OpenAI cost depends on the deployed model and usage. See the [Azure OpenAI pricing page](https://azure.microsoft.com/pricing/details/cognitive-services/openai-service/).
+OpenAI and Azure OpenAI cost depends on the selected model and usage. See the [OpenAI API pricing page](https://openai.com/api/pricing/) and [Azure OpenAI pricing page](https://azure.microsoft.com/pricing/details/cognitive-services/openai-service/).
 
 ## Architecture
 
