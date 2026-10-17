@@ -2,12 +2,14 @@ import asyncio
 import hashlib
 import logging
 import os
+from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
 import azure.identity
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from playwright.async_api import Page, async_playwright
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import BaseModel
 from pydantic_ai import Agent, NativeOutput
 from pydantic_ai.models.fallback import FallbackModel
@@ -19,7 +21,8 @@ from pydantic_ai.settings import ModelSettings
 from rich.logging import RichHandler
 
 from review_graph import MESSAGE_GRAPH_ID
-from review_queue import enqueue_review, fetch_resolved_reviews, get_review_client, mark_applied
+from review_queue import classify_review, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_review, get_review_client, mark_applied, supersede_review
+from unattended import KNOWN_STREAK_STOP, HealthCheckError, LoginRequiredError, ReviewCounts
 
 # Setup logging with rich
 logging.basicConfig(level=logging.WARNING, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(show_level=True)])
@@ -130,6 +133,8 @@ class InboxMessage(BaseModel):
     last_three_messages: list[ConversationMessage]
     conversation_url: str
     ranking: MessageRanking | None = None
+    known: str | None = None  # run-report bucket when an existing review already covers this message
+    from_user: bool = False  # True only when the latest message's author exactly matches the logged-in user
 
 
 def is_linkedin_conversation_url(value: object) -> bool:
@@ -206,91 +211,122 @@ For each message, provide:
     )
 
 
-async def get_inbox_messages(page: Page, num_messages: int = 20) -> list[InboxMessage]:
-    """Navigate to LinkedIn messaging and extract recent messages."""
-    logger.info("Navigating to LinkedIn messaging...")
+UNKNOWN_AUTHORS = {"", "unknown", "unknown user"}
 
-    # Go to messaging
+
+def latest_message_is_from_user(messages: list[ConversationMessage], logged_in_user: str) -> bool:
+    """True only when the latest author exactly matches the user; any ambiguity returns False so the item is kept."""
+    if not messages or logged_in_user.strip().casefold() in UNKNOWN_AUTHORS:
+        return False
+    author = messages[-1].author.strip().casefold()
+    return author not in UNKNOWN_AUTHORS and author == logged_in_user.strip().casefold()
+
+
+def message_key(conversation_url: str, latest_message: str) -> str:
+    # Key on the latest message so a new message in the same conversation is queued again.
+    return f"{conversation_url}|{hashlib.sha1(latest_message.encode()).hexdigest()[:12]}"
+
+
+def conversation_url_from_key(key: str) -> str:
+    return key.rsplit("|", 1)[0]
+
+
+async def extract_conversation_messages(page: Page, sender_name: str) -> list[ConversationMessage]:
+    """Extract the last three messages of the open conversation."""
+    last_three_messages: list[ConversationMessage] = []
+    try:
+        message_elements = await page.query_selector_all("li.msg-s-message-list__event")
+        # LinkedIn only prints the author name on the first message of a consecutive group, so carry it forward.
+        current_author = "Unknown"
+        authored: list[tuple[str, object]] = []
+        for msg_element in message_elements:
+            author_element = await msg_element.query_selector(".msg-s-message-group__name")
+            if not author_element:
+                author_element = await msg_element.query_selector("a .msg-s-message-group__profile-link")
+            if author_element:
+                name = (await author_element.inner_text()).strip()
+                if name:
+                    current_author = name
+            authored.append((current_author, msg_element))
+
+        for author, msg_element in authored[-3:]:
+            try:
+                content_element = await msg_element.query_selector("p.msg-s-event-listitem__body")
+                content = await content_element.inner_text() if content_element else "No content"
+
+                timestamp_element = await msg_element.query_selector("time.msg-s-message-group__timestamp")
+                if not timestamp_element:
+                    timestamp_element = await msg_element.query_selector("time.msg-s-message-list__time-heading")
+                timestamp = await timestamp_element.inner_text() if timestamp_element else "Unknown time"
+
+                last_three_messages.append(ConversationMessage(author=author, content=content.strip(), timestamp=timestamp.strip()))
+            except Exception as e:
+                logger.warning(f"Error extracting individual message: {e}")
+                continue
+        logger.info(f"Extracted {len(last_three_messages)} messages for {sender_name}")
+    except Exception as e:
+        logger.warning(f"Could not extract messages for {sender_name}: {e}")
+        last_three_messages.append(ConversationMessage(author=sender_name, content="Could not extract message content", timestamp="Unknown"))
+    return last_three_messages
+
+
+async def get_inbox_messages(page: Page, num_messages: int = 100, logged_in_user: str = "Unknown User", known_check=None) -> tuple[list[InboxMessage], bool]:
+    """Walk the conversation list until caught up. Returns (messages, cap_hit).
+
+    `known_check(message)` returns a report bucket when an existing review already covers the message (or None).
+    Scanning stops after KNOWN_STREAK_STOP consecutive settled conversations (known, or last spoken by the user);
+    `num_messages` is only a safety cap.
+    """
+    logger.info("Navigating to LinkedIn messaging...")
     await page.goto("https://www.linkedin.com/messaging/")
     await page.wait_for_load_state("load")
+    try:
+        await page.wait_for_selector("li.msg-conversation-listitem", timeout=10000)
+    except PlaywrightTimeoutError as error:
+        raise HealthCheckError("No conversations found in LinkedIn messaging; treating as a scrape failure.") from error
 
-    # Wait for messages to load
-    await page.wait_for_selector("li.msg-conversation-listitem", timeout=10000)
-
-    # Get conversation elements
-    conversation_elements = await page.query_selector_all("li.msg-conversation-listitem")
-    messages = []
-
-    for i, conversation in enumerate(conversation_elements[:num_messages]):
+    messages: list[InboxMessage] = []
+    index = 0
+    settled_streak = 0
+    caught_up = False
+    while index < num_messages:
+        conversation_elements = await page.query_selector_all("li.msg-conversation-listitem")
+        if index >= len(conversation_elements):
+            # Lazy-loaded list: scroll the last row into view and see whether more rows appear.
+            if not conversation_elements:
+                break
+            await conversation_elements[-1].scroll_into_view_if_needed()
+            await page.wait_for_timeout(2000)
+            if len(await page.query_selector_all("li.msg-conversation-listitem")) <= index:
+                break
+            continue
+        conversation = conversation_elements[index]
+        index += 1
         try:
             sender_element = await conversation.query_selector("h3.msg-conversation-card__participant-names")
             sender_name = await sender_element.inner_text() if sender_element else "Unknown"
 
-            # Click on the conversation to open it and get more details
             logger.info(f"Opening conversation with {sender_name}...")
             await conversation.click()
-
-            # Wait for the conversation to load
             await page.wait_for_load_state("load")
-            await page.wait_for_timeout(2000)  # Give it a moment to fully load
+            await page.wait_for_timeout(2000)
 
-            # Try to get the full conversation URL from the current page
-            conversation_url = page.url
-
-            # Extract the last three messages from the conversation
-            last_three_messages = []
-            try:
-                # Look for all message events in the conversation
-                message_elements = await page.query_selector_all("li.msg-s-message-list__event")
-
-                # Get the last 3 messages (or however many are available)
-                recent_messages = message_elements[-3:] if len(message_elements) >= 3 else message_elements
-
-                for msg_element in recent_messages:
-                    try:
-                        # Get the author name from the messagea
-                        author_element = await msg_element.query_selector(".msg-s-message-group__name")
-                        if not author_element:
-                            # Try alternative selector
-                            author_element = await msg_element.query_selector("a .msg-s-message-group__profile-link")
-
-                        author = await author_element.inner_text() if author_element else "Unknown"
-
-                        # Get the message content
-                        content_element = await msg_element.query_selector("p.msg-s-event-listitem__body")
-                        content = await content_element.inner_text() if content_element else "No content"
-
-                        # Get the timestamp
-                        timestamp_element = await msg_element.query_selector("time.msg-s-message-group__timestamp")
-                        if not timestamp_element:
-                            # Try alternative timestamp selector
-                            timestamp_element = await msg_element.query_selector("time.msg-s-message-list__time-heading")
-
-                        timestamp = await timestamp_element.inner_text() if timestamp_element else "Unknown time"
-
-                        # Create the message object
-                        conversation_message = ConversationMessage(author=author.strip(), content=content.strip(), timestamp=timestamp.strip())
-                        last_three_messages.append(conversation_message)
-
-                    except Exception as e:
-                        logger.warning(f"Error extracting individual message: {e}")
-                        continue
-
-                logger.info(f"Extracted {len(last_three_messages)} messages for {sender_name}")
-
-            except Exception as e:
-                logger.warning(f"Could not extract messages for {sender_name}: {e}")
-                # Add a default message if extraction fails
-                last_three_messages.append(ConversationMessage(author=sender_name, content="Could not extract message content", timestamp="Unknown"))
-
-            message = InboxMessage(sender_name=sender_name, last_three_messages=last_three_messages, conversation_url=conversation_url)
+            last_three_messages = await extract_conversation_messages(page, sender_name)
+            message = InboxMessage(sender_name=sender_name, last_three_messages=last_three_messages, conversation_url=page.url)
+            message.from_user = latest_message_is_from_user(last_three_messages, logged_in_user)
+            if known_check and not message.from_user:
+                message.known = await known_check(message)
             messages.append(message)
-
+            settled_streak = settled_streak + 1 if (message.from_user or message.known) else 0
+            if settled_streak >= KNOWN_STREAK_STOP:
+                logger.info("Reached %d consecutive settled conversations; caught up.", settled_streak)
+                caught_up = True
+                break
         except Exception as e:
-            logger.warning(f"Error extracting message {i}: {e}")
+            logger.warning(f"Error extracting message {index - 1}: {e}")
             continue
 
-    return messages
+    return messages, (index >= num_messages and not caught_up)
 
 
 async def rank_messages_for_reply(messages: list[InboxMessage], message_ranking_agent) -> list[InboxMessage]:
@@ -325,13 +361,13 @@ Consider the flow of conversation and whether the last message seems to be waiti
 
         except Exception as e:
             logger.warning(f"Error ranking message from {message.sender_name}: {e}")
-            # Default ranking if AI analysis fails
-            message.ranking = MessageRanking(reason="Error analyzing message", urgency_score=1, suggested_reply="")
+            # Leave unscored; it is still queued, labelled "Couldn't score", so it is never hidden.
+            message.ranking = None
 
         ranked_messages.append(message)
 
     # Sort by urgency score (highest first)
-    ranked_messages.sort(key=lambda x: x.ranking.urgency_score if x.ranking else 0, reverse=True)
+    ranked_messages.sort(key=lambda x: x.ranking.urgency_score if x.ranking else -1, reverse=True)
 
     return ranked_messages
 
@@ -351,12 +387,15 @@ async def apply_message_reviews(context, review_client) -> int:
         if action == "reply":
             reply = values.get("reply")
             conversation_url = values.get("conversation_url")
-            if not isinstance(reply, str) or not reply.strip() or not is_linkedin_conversation_url(conversation_url):
+            # An empty reply is valid (an unscored conversation has no suggestion); it just opens the thread.
+            if not isinstance(reply, str) or not is_linkedin_conversation_url(conversation_url):
                 logger.warning("Skipping malformed approved message reply: %r", values)
                 continue
-            logger.info(f"\nApproved reply for {values.get('sender_name', 'conversation')}:\n{values.get('reply', '')}\n{values.get('conversation_url', '')}")
+            logger.info(f"\nApproved reply for {values.get('sender_name', 'conversation')}:\n{reply or '(no reply drafted)'}\n{conversation_url}")
             reply_page = await context.new_page()
             await reply_page.goto(conversation_url)
+        elif action == "superseded":
+            continue
         elif action != "dismiss":
             logger.warning("Skipping malformed message review: %r", values)
             continue
@@ -365,119 +404,197 @@ async def apply_message_reviews(context, review_client) -> int:
     return applied
 
 
-async def send_messages_to_inbox(review_client, messages: list[InboxMessage], min_urgency: int) -> int:
-    sent = 0
+async def finalize_dismissed_messages(review_client) -> int:
+    """Mark dismissed message reviews applied. Needs no browser; approved replies stay for a manual --apply-inbox-decisions."""
+    resolved = await fetch_resolved_reviews(review_client, MESSAGE_GRAPH_ID)
+    finalized = 0
+    for resolved_review in resolved.values():
+        thread_id = resolved_review.get("thread_id")
+        if (resolved_review.get("values") or {}).get("action") == "dismiss" and isinstance(thread_id, str) and thread_id:
+            await mark_applied(review_client, thread_id)
+            finalized += 1
+    return finalized
+
+
+async def close_self_replied_messages(page: Page, review_client, logged_in_user: str) -> int:
+    """Supersede pending message reviews whose conversation's latest message is from the user.
+
+    Only the pending items' own conversations are opened. Anything ambiguous (unknown author, no messages,
+    unknown user name) keeps the item.
+    """
+    pending = await fetch_pending_reviews(review_client, MESSAGE_GRAPH_ID)
+    if not pending:
+        return 0
+    closed = 0
+    for key, thread_id in pending.items():
+        url = conversation_url_from_key(key)
+        if not is_linkedin_conversation_url(url):
+            continue
+        try:
+            await page.goto(url)
+            await page.wait_for_load_state("load")
+            await page.wait_for_timeout(2000)
+            messages = await extract_conversation_messages(page, "conversation")
+        except Exception as e:
+            logger.warning("Could not check %s; keeping its review: %s", url, e)
+            continue
+        if latest_message_is_from_user(messages, logged_in_user):
+            await supersede_review(review_client, thread_id, "You replied on LinkedIn.")
+            logger.info("Closed %s as superseded (you replied).", url)
+            closed += 1
+    return closed
+
+
+async def send_messages_to_inbox(review_client, messages: list[InboxMessage], min_urgency: int, pending: dict[str, str] | None = None) -> ReviewCounts:
+    """Queue every conversation where someone else spoke last (failing open); urgency is a label, never a filter.
+
+    A new message supersedes older pending items for the same conversation. `pending` maps key -> thread_id.
+    """
+    counts = ReviewCounts()
+    pending = dict(pending or {})
     for msg in messages:
-        if not msg.ranking or msg.ranking.urgency_score < min_urgency or not msg.conversation_url or not msg.ranking.suggested_reply.strip():
+        if msg.known:
+            setattr(counts, msg.known, getattr(counts, msg.known) + 1)
+            continue
+        if msg.from_user or not msg.conversation_url:
             continue
         latest = msg.last_three_messages[-1].content if msg.last_three_messages else ""
-        # Key on the latest message so a new message in the same conversation is queued again.
-        key = f"{msg.conversation_url}|{hashlib.sha1(latest.encode()).hexdigest()[:12]}"
-        input_data = {
+        key = message_key(msg.conversation_url, latest)
+        input_data: dict = {
             "sender_name": msg.sender_name,
             "conversation_url": msg.conversation_url,
-            "urgency_score": msg.ranking.urgency_score,
             "latest_message": latest,
-            "reason": msg.ranking.reason,
-            "suggested_reply": msg.ranking.suggested_reply,
         }
+        if msg.ranking:
+            input_data.update(urgency_score=msg.ranking.urgency_score, reason=msg.ranking.reason, suggested_reply=msg.ranking.suggested_reply)
+            if msg.ranking.urgency_score < min_urgency:
+                input_data["label"] = f"Low urgency ({msg.ranking.urgency_score}/10)"
+        else:
+            input_data.update(label="Couldn't score", reason="The agent could not score this conversation; review it yourself.", suggested_reply="")
+            counts.needs_judgment += 1
         if await enqueue_review(review_client, MESSAGE_GRAPH_ID, key, input_data):
-            sent += 1
-    return sent
+            counts.new += 1
+            for old_key, old_thread_id in list(pending.items()):
+                if old_key != key and conversation_url_from_key(old_key) == msg.conversation_url:
+                    await supersede_review(review_client, old_thread_id, "A newer message arrived in this conversation.")
+                    del pending[old_key]
+                    counts.superseded += 1
+        else:
+            counts.already_queued += 1
+    return counts
 
 
-async def manage_linkedin_inbox(num_messages: int = 20, apply_inbox_decisions: bool = False, min_urgency: int = 4) -> list[InboxMessage]:
-    """Main function to manage LinkedIn inbox and rank top messages requiring replies."""
-    logger.info("Starting LinkedIn inbox management...")
-    review_client = get_review_client()
-    # Set up the storage state for Playwright
+@asynccontextmanager
+async def linkedin_session(headless: bool, unattended: bool):
+    """Yield (context, page) for a logged-in LinkedIn session.
+
+    When unattended (or headless) an expired session raises LoginRequiredError instead of waiting for a human.
+    """
     os.makedirs("playwright/.auth", exist_ok=True)
     if not os.path.exists("playwright/.auth/state.json"):
         with open("playwright/.auth/state.json", "w") as f:
             f.write("{}")
 
     async with async_playwright() as p:
-        # Launch browser
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context(storage_state="playwright/.auth/state.json")
-        page = await context.new_page()
-
-        # Check if the user is logged in
-        await page.goto("https://www.linkedin.com/feed")
-        if not page.url.startswith("https://www.linkedin.com/feed"):
-            logger.info("User is not logged in. Please log in manually...")
-            await page.goto("https://www.linkedin.com/login")
-            await page.wait_for_url("https://www.linkedin.com/feed/**", timeout=120000)
-            logger.info("Login detected. Saving storage state...")
-            await context.storage_state(path="playwright/.auth/state.json")
-
-        if apply_inbox_decisions:
-            await apply_message_reviews(context, review_client)
-            await asyncio.to_thread(input, "Press Enter to close the browser...")
+        browser = await p.chromium.launch(headless=headless)
+        try:
+            context = await browser.new_context(storage_state="playwright/.auth/state.json")
+            page = await context.new_page()
+            await page.goto("https://www.linkedin.com/feed")
+            if not page.url.startswith("https://www.linkedin.com/feed"):
+                if headless or unattended:
+                    raise LoginRequiredError("LinkedIn session expired; log in again with a visible browser.")
+                logger.info("User is not logged in. Please log in manually...")
+                await page.goto("https://www.linkedin.com/login")
+                await page.wait_for_url("https://www.linkedin.com/feed/**", timeout=120000)
+                logger.info("Login detected. Saving storage state...")
+                await context.storage_state(path="playwright/.auth/state.json")
+            yield context, page
+        finally:
             await browser.close()
-            return []
 
-        # Get the logged-in user's name
+
+async def manage_linkedin_inbox(
+    num_messages: int = 100,
+    apply_inbox_decisions: bool = False,
+    min_urgency: int = 4,
+    headless: bool = False,
+    unattended: bool = False,
+    cleanup_only: bool = False,
+) -> ReviewCounts:
+    """Queue conversations needing a reply, apply approved reviews, or (cleanup_only) finalize/close handled ones without any LLM call."""
+    logger.info("Starting LinkedIn inbox management...")
+    review_client = get_review_client()
+
+    if cleanup_only:
+        counts = ReviewCounts()
+        finalized = await finalize_dismissed_messages(review_client)
+        logger.info("Finalized %d dismissed message review(s).", finalized)
+        if await fetch_pending_reviews(review_client, MESSAGE_GRAPH_ID):
+            async with linkedin_session(headless, unattended) as (_context, page):
+                logged_in_user = await get_logged_in_user_name(page)
+                counts.superseded = await close_self_replied_messages(page, review_client, logged_in_user)
+        counts.applied = finalized
+        return counts
+
+    async with linkedin_session(headless, unattended) as (context, page):
+        if apply_inbox_decisions:
+            applied = await apply_message_reviews(context, review_client)
+            if not (headless or unattended):
+                await asyncio.to_thread(input, "Press Enter to close the browser...")
+            return ReviewCounts(applied=applied)
+
         logged_in_user = await get_logged_in_user_name(page)
         logger.info(f"Managing inbox for user: {logged_in_user}")
-
-        # Create the message ranking agent with user context
         message_ranking_agent = create_message_ranking_agent(logged_in_user)
 
-        # Get recent messages
-        messages = await get_inbox_messages(page, num_messages)
-        logger.info(f"Found {len(messages)} recent messages")
+        async def known_check(message: InboxMessage) -> str | None:
+            latest = message.last_three_messages[-1].content if message.last_three_messages else ""
+            existing = await find_review(review_client, MESSAGE_GRAPH_ID, message_key(message.conversation_url, latest))
+            return classify_review(existing) if existing else None
 
-        # Rank messages for reply priority
-        ranked_messages = await rank_messages_for_reply(messages, message_ranking_agent)
+        messages, cap_hit = await get_inbox_messages(page, num_messages, logged_in_user, known_check)
+        logger.info(f"Scanned {len(messages)} conversations")
 
-        sent = await send_messages_to_inbox(review_client, ranked_messages, min_urgency)
-        logger.info(f"Sent {sent} conversation(s) with urgency >= {min_urgency} to Agent Inbox.")
+        # Only new conversations where someone else spoke last cost an LLM call.
+        needs_ranking = [m for m in messages if not m.known and not m.from_user]
+        await rank_messages_for_reply(needs_ranking, message_ranking_agent)
+        ranked_messages = sorted(needs_ranking, key=lambda m: m.ranking.urgency_score if m.ranking else -1, reverse=True)
 
-        # Generate report
+        pending = await fetch_pending_reviews(review_client, MESSAGE_GRAPH_ID)
+        counts = await send_messages_to_inbox(review_client, [m for m in messages if m.known] + ranked_messages, min_urgency, pending)
+        # Conversations the user already answered on LinkedIn no longer need a review.
+        for msg in messages:
+            if msg.from_user:
+                for key, thread_id in list(pending.items()):
+                    if conversation_url_from_key(key) == msg.conversation_url:
+                        await supersede_review(review_client, thread_id, "You replied on LinkedIn.")
+                        del pending[key]
+                        counts.superseded += 1
+        counts.cap_hit = cap_hit
         logger.info("\n=== LinkedIn Inbox Management Report ===")
-        logger.info(f"Analyzed {len(ranked_messages)} messages")
-
-        # Show all messages with suggested reply or emoji reaction
-        logger.info("\nAll messages with suggested reply or emoji reaction:")
+        logger.info("Messages: %s", counts.describe())
         for i, msg in enumerate(ranked_messages, 1):
-            if msg.ranking:
-                logger.info(f"\n{i}. {msg.sender_name} - Urgency Score: {msg.ranking.urgency_score}")
-                if msg.last_three_messages:
-                    latest_msg = msg.last_three_messages[-1]
-                    logger.info(f"   Latest Message: {latest_msg.content}")
-                reply_or_emoji = msg.ranking.suggested_reply if msg.ranking.suggested_reply else "👍"
-                logger.info(f"   Suggested Reply/Emoji: {reply_or_emoji}")
-                logger.info(f"   Conversation: {msg.conversation_url}")
+            score = msg.ranking.urgency_score if msg.ranking else "unscored"
+            logger.info(f"{i}. {msg.sender_name} - urgency {score}\n   Latest: {msg.last_three_messages[-1].content if msg.last_three_messages else ''}\n   Conversation: {msg.conversation_url}")
 
-        # Open the message with the highest urgency
-        highest_urgency_msg = ranked_messages[0] if ranked_messages else None
-        if highest_urgency_msg and highest_urgency_msg.conversation_url:
-            logger.info(f"\nOpening highest urgency message: {highest_urgency_msg.sender_name} - {highest_urgency_msg.conversation_url}")
-            await page.goto(highest_urgency_msg.conversation_url)
+        if ranked_messages and ranked_messages[0].conversation_url and not (headless or unattended):
+            top = ranked_messages[0]
+            logger.info(f"\nOpening highest urgency message: {top.sender_name} - {top.conversation_url}")
+            await page.goto(top.conversation_url)
             await page.wait_for_load_state("load")
             await page.wait_for_timeout(3000)
 
-        # Show summary by urgency ranges
-        high_urgency = [msg for msg in ranked_messages if msg.ranking and msg.ranking.urgency_score >= 7]
-        medium_urgency = [msg for msg in ranked_messages if msg.ranking and 4 <= msg.ranking.urgency_score < 7]
-        low_urgency = [msg for msg in ranked_messages if msg.ranking and msg.ranking.urgency_score < 4]
-
-        logger.info("\nUrgency breakdown:")
-        logger.info(f"  High urgency (7-10): {len(high_urgency)} messages")
-        logger.info(f"  Medium urgency (4-6): {len(medium_urgency)} messages")
-        logger.info(f"  Low urgency (1-3): {len(low_urgency)} messages")
-
-        await browser.close()
-
-    return ranked_messages
+    return counts
 
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Manage LinkedIn inbox messages.")
-    parser.add_argument("--num-messages", type=int, default=20, help="Number of recent inbox messages to analyze (default: 20).")
+    parser.add_argument("--num-messages", type=int, default=100, help="Safety cap on conversations to scan per run (default: 100). Scanning stops earlier once it reaches conversations already handled.")
+    parser.add_argument("--headless", action="store_true", help="Run browser in headless mode.")
+    parser.add_argument("--cleanup-only", action="store_true", help="Finalize dismissed reviews and close ones you already answered on LinkedIn; makes no LLM calls.")
     parser.add_argument(
         "--model-backend",
         choices=["ollama", "openai", "azure", "fallback"],
@@ -486,10 +603,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--send-to-inbox", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--apply-inbox-decisions", action="store_true", help="Open conversations a human approved in Agent Inbox and print the approved reply (nothing is sent).")
-    parser.add_argument("--min-urgency", type=int, default=4, help="Minimum urgency score (1-10) to send to Agent Inbox (default: 4).")
+    parser.add_argument("--min-urgency", type=int, default=4, help="Conversations scoring below this get a 'Low urgency' label in Agent Inbox; they are still queued (default: 4).")
     args = parser.parse_args()
 
     if args.model_backend and args.model_backend != MODEL_BACKEND:
         model = build_model(args.model_backend)
 
-    asyncio.run(manage_linkedin_inbox(args.num_messages, apply_inbox_decisions=args.apply_inbox_decisions, min_urgency=args.min_urgency))
+    asyncio.run(manage_linkedin_inbox(args.num_messages, apply_inbox_decisions=args.apply_inbox_decisions, min_urgency=args.min_urgency, headless=args.headless, cleanup_only=args.cleanup_only))

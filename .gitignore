@@ -159,3 +159,6 @@ playwright-report/
 
 # LangGraph dev server state
 .langgraph_api/
+
+# Scheduled-run logs
+logs/

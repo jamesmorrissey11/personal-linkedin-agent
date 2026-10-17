@@ -4,6 +4,7 @@ import os
 
 from langgraph_sdk import get_client
 
+SEARCH_PAGE_SIZE = 100
 LANGGRAPH_URL = os.environ.get("LANGGRAPH_URL", "http://localhost:2024")
 
 
@@ -23,9 +24,37 @@ async def enqueue_review(client, graph_id: str, key: str, input_data: dict) -> b
     return True
 
 
+async def _search_all_threads(client, **filters) -> list[dict]:
+    """Page through every matching thread instead of stopping at the first page."""
+    threads: list[dict] = []
+    offset = 0
+    while True:
+        page = await client.threads.search(limit=SEARCH_PAGE_SIZE, offset=offset, **filters)
+        threads.extend(page)
+        if len(page) < SEARCH_PAGE_SIZE:
+            return threads
+        offset += SEARCH_PAGE_SIZE
+
+
+async def find_review(client, graph_id: str, key: str) -> dict | None:
+    """Return the existing review thread for `key` (in any state), or None."""
+    existing = await client.threads.search(metadata={"kind": graph_id, "key": key}, limit=1)
+    return existing[0] if existing else None
+
+
+def classify_review(thread: dict) -> str:
+    """Bucket an existing thread as 'superseded', 'applied', or 'already_queued' for run reports."""
+    metadata = thread.get("metadata") or {}
+    if metadata.get("outcome") == "superseded":
+        return "superseded"
+    if metadata.get("applied"):
+        return "applied"
+    return "already_queued"
+
+
 async def fetch_resolved_reviews(client, graph_id: str) -> dict[str, dict]:
     """Map key -> {'thread_id', 'values'} for completed reviews that haven't been marked applied."""
-    threads = await client.threads.search(metadata={"kind": graph_id}, status="idle", limit=100)
+    threads = await _search_all_threads(client, metadata={"kind": graph_id}, status="idle")
     resolved = {}
     for thread in threads:
         metadata = thread.get("metadata") or {}
@@ -35,6 +64,27 @@ async def fetch_resolved_reviews(client, graph_id: str) -> dict[str, dict]:
         if values:
             resolved[metadata["key"]] = {"thread_id": thread["thread_id"], "values": values}
     return resolved
+
+
+async def fetch_pending_reviews(client, graph_id: str) -> dict[str, str]:
+    """Map key -> thread_id for reviews still waiting on a human (shown in Agent Inbox's Interrupted view)."""
+    threads = await _search_all_threads(client, metadata={"kind": graph_id}, status="interrupted")
+    pending = {}
+    for thread in threads:
+        metadata = thread.get("metadata") or {}
+        if metadata.get("key") and not metadata.get("applied"):
+            pending[metadata["key"]] = thread["thread_id"]
+    return pending
+
+
+async def supersede_review(client, thread_id: str, reason: str) -> None:
+    """Close a pending review as a no-op by resuming it with a `superseded` response. Never deletes the thread."""
+    thread = await client.threads.get(thread_id)
+    graph_id = (thread.get("metadata") or {}).get("kind")
+    if not graph_id:
+        raise ValueError(f"Thread {thread_id} has no graph kind in its metadata")
+    await client.runs.wait(thread_id, graph_id, command={"resume": [{"type": "superseded", "args": reason}]})
+    await client.threads.update(thread_id, metadata={"applied": True, "outcome": "superseded", "superseded_reason": reason})
 
 
 async def mark_applied(client, thread_id: str) -> None:

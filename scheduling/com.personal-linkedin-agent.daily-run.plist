@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.personal-linkedin-agent.daily-run</string>
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__UV_DIR__:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__UV__</string>
+        <string>run</string>
+        <string>python</string>
+        <string>daily_run.py</string>
+        <string>--mode</string>
+        <string>full</string>
+        <string>--headless</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>6</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__REPO__/logs/daily-run.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO__/logs/daily-run.err.log</string>
+</dict>
+</plist>

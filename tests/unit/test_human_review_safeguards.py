@@ -70,19 +70,39 @@ def test_agent_invitation_proposal_only_queues_and_does_not_click(monkeypatch):
     assert card.ignore.clicks == 0
 
 
-def test_undecided_invitation_does_not_queue_or_click(monkeypatch):
-    async def unexpected_enqueue(*args, **kwargs):
-        raise AssertionError("undecided invitations must not create action reviews")
+def test_undecided_invitation_is_queued_for_judgment_without_clicking(monkeypatch):
+    queued = []
 
-    monkeypatch.setattr(invitations_manager, "enqueue_review", unexpected_enqueue)
+    async def fake_enqueue(client, graph_id, key, input_data):
+        queued.append(input_data)
+        return True
+
+    monkeypatch.setattr(invitations_manager, "enqueue_review", fake_enqueue)
     card = FakeInvitationCard()
     candidate = invitation(InvitationAction.UNDECIDED)
 
     created = run_async_test(lambda: invitations_manager.queue_invitation_proposal(object(), candidate, candidate.decision))
 
-    assert created is False
+    assert created is True
+    assert queued[0]["label"] == "Needs your judgment"
+    assert "Agent proposes" not in queued[0]["reason"]
     assert card.accept.clicks == 0
     assert card.ignore.clicks == 0
+
+
+def test_failed_llm_invitation_is_queued_with_error(monkeypatch):
+    queued = []
+
+    async def fake_enqueue(client, graph_id, key, input_data):
+        queued.append(input_data)
+        return True
+
+    monkeypatch.setattr(invitations_manager, "enqueue_review", fake_enqueue)
+
+    run_async_test(lambda: invitations_manager.queue_invitation_proposal(object(), invitation(), None, "TimeoutError()"))
+
+    assert queued[0]["label"] == "Needs your judgment"
+    assert "TimeoutError()" in queued[0]["reason"]
 
 
 def test_invitation_queue_failure_is_surfaced_without_clicking(monkeypatch):
@@ -115,7 +135,7 @@ def test_only_valid_resolved_invitation_review_can_execute():
     assert card.ignore.clicks == 1
 
 
-def test_message_proposals_are_queued_only_with_actionable_reply(monkeypatch):
+def test_every_message_where_other_person_spoke_last_is_queued_with_labels(monkeypatch):
     queued = []
 
     async def fake_enqueue(client, graph_id, key, input_data):
@@ -123,20 +143,28 @@ def test_message_proposals_are_queued_only_with_actionable_reply(monkeypatch):
         return True
 
     monkeypatch.setattr(inbox_manager, "enqueue_review", fake_enqueue)
+    unscored = message()
+    unscored.ranking = None
+    from_user = message()
+    from_user.from_user = True
 
-    count = run_async_test(lambda: inbox_manager.send_messages_to_inbox(object(), [message(), message(urgency=2), message(reply="")], min_urgency=4))
+    counts = run_async_test(lambda: inbox_manager.send_messages_to_inbox(object(), [message(), message(urgency=2), message(reply=""), unscored, from_user], min_urgency=4))
 
-    assert count == 1
-    assert queued == [
-        {
-            "sender_name": "Grace",
-            "conversation_url": "https://www.linkedin.com/messaging/thread/1/",
-            "urgency_score": 8,
-            "latest_message": "Can you review this?",
-            "reason": "Direct request",
-            "suggested_reply": "Thanks, I will take a look.",
-        }
-    ]
+    assert counts.new == 4
+    assert counts.needs_judgment == 1
+    assert queued[0] == {
+        "sender_name": "Grace",
+        "conversation_url": "https://www.linkedin.com/messaging/thread/1/",
+        "latest_message": "Can you review this?",
+        "urgency_score": 8,
+        "reason": "Direct request",
+        "suggested_reply": "Thanks, I will take a look.",
+    }
+    assert queued[1]["label"] == "Low urgency (2/10)"
+    assert queued[2]["suggested_reply"] == ""
+    assert queued[3]["label"] == "Couldn't score"
+    assert queued[3]["suggested_reply"] == ""
+    assert "urgency_score" not in queued[3]
 
 
 def test_message_queue_failure_is_surfaced(monkeypatch):
@@ -162,7 +190,7 @@ def test_approved_message_review_navigates_but_never_sends_and_marks_after_navig
             },
         },
         "dismiss": {"thread_id": "dismiss-thread", "values": {"action": "dismiss"}},
-        "malformed": {"thread_id": "bad-thread", "values": {"action": "reply", "reply": ""}},
+        "malformed": {"thread_id": "bad-thread", "values": {"action": "reply", "reply": 5}},
         "external": {
             "thread_id": "external-thread",
             "values": {"action": "reply", "reply": "Approved", "conversation_url": "https://example.com/messages/"},
