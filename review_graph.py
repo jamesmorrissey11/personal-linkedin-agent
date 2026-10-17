@@ -3,12 +3,21 @@
 Served by `uv run langgraph dev` (see langgraph.json) and rendered by the self-hosted UI in agent-inbox/.
 """
 
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
 from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from linkedin_actions import perform_invitation_action, perform_message_action
+from review_queue import get_review_client, recover_stuck_reviews
+from unattended import notify
+
 GRAPH_ID = "invitation_review"
+logger = logging.getLogger("review_graph")
 
 
 # Agent Inbox interrupt schema (https://github.com/langchain-ai/agent-inbox)
@@ -36,10 +45,13 @@ class ReviewState(TypedDict, total=False):
     job_title: str
     reason: str
     label: str
-    decision: Literal["accept", "ignore", "superseded"]
+    decision: Literal["accept", "ignore", "superseded"] | None
+    last_error: str
+    outcome: str
 
 
 def build_interrupt(state: ReviewState) -> HumanInterrupt:
+    error_prefix = f"⚠️ **Last attempt failed:** {state['last_error']}\n\n" if state.get("last_error") else ""
     return HumanInterrupt(
         action_request=ActionRequest(
             action=f"Accept invitation from {state['name']}?",
@@ -47,7 +59,7 @@ def build_interrupt(state: ReviewState) -> HumanInterrupt:
         ),
         # "Accept" accepts the invitation; "Ignore" ignores it.
         config=HumanInterruptConfig(allow_ignore=True, allow_respond=False, allow_edit=False, allow_accept=True),
-        description=f"**{state.get('label') or 'Agent proposal'}**\n\n**Reason:** {state.get('reason', 'n/a')}\n\n[View profile]({state['profile']})",
+        description=f"{error_prefix}**{state.get('label') or 'Agent proposal'}**\n\n**Reason:** {state.get('reason', 'n/a')}\n\n[View profile]({state['profile']})",
     )
 
 
@@ -69,10 +81,40 @@ def review(state: ReviewState) -> ReviewState:
     return {"decision": decision_from_response(responses[0])}
 
 
+async def _recover_reviews(graph_id: str) -> None:
+    try:
+        await recover_stuck_reviews(get_review_client(), graph_id, datetime.now(timezone.utc))
+    except Exception:
+        logger.exception("Could not recover stuck %s reviews before acting.", graph_id)
+
+
+async def act_on_invitation(state: ReviewState) -> ReviewState:
+    await _recover_reviews(GRAPH_ID)
+    decision = state.get("decision")
+    if decision not in {"accept", "ignore"}:
+        return {}
+    result = await perform_invitation_action(state["profile"], decision)
+    if result.outcome:
+        return {"outcome": result.outcome, "last_error": ""}
+    error = result.error or "The LinkedIn action failed; try again."
+    notify("LinkedIn action failed", f"{state['name']}: {error}")
+    return {"last_error": error, "decision": None}
+
+
+def route_after_review(state: dict[str, Any]) -> Literal["act", "__end__"]:
+    return "__end__" if state.get("decision") == "superseded" or state.get("action") == "superseded" else "act"
+
+
+def route_after_act(state: dict[str, Any]) -> Literal["review", "__end__"]:
+    return "__end__" if state.get("outcome") else "review"
+
+
 builder = StateGraph(ReviewState)
 builder.add_node("review", review)
+builder.add_node("act", act_on_invitation)
 builder.add_edge(START, "review")
-builder.add_edge("review", END)
+builder.add_conditional_edges("review", route_after_review, {"act": "act", "__end__": END})
+builder.add_conditional_edges("act", route_after_act, {"review": "review", "__end__": END})
 
 graph = builder.compile()
 
@@ -88,11 +130,14 @@ class MessageReviewState(TypedDict, total=False):
     latest_message: str
     reason: str
     suggested_reply: str
-    action: Literal["reply", "dismiss", "superseded"]
+    action: Literal["reply", "dismiss", "superseded"] | None
     reply: str
+    last_error: str
+    outcome: str
 
 
 def build_message_interrupt(state: MessageReviewState) -> HumanInterrupt:
+    error_prefix = f"⚠️ **Last attempt failed:** {state['last_error']}\n\n" if state.get("last_error") else ""
     label_line = f"**{state['label']}**\n\n" if state.get("label") else ""
     return HumanInterrupt(
         action_request=ActionRequest(
@@ -100,8 +145,8 @@ def build_message_interrupt(state: MessageReviewState) -> HumanInterrupt:
             args={"suggested_reply": state.get("suggested_reply", "")},
         ),
         # Accept uses the suggested reply, Edit lets you change it, Ignore dismisses the conversation.
-        config=HumanInterruptConfig(allow_ignore=True, allow_respond=False, allow_edit=True, allow_accept=True),
-        description=(f"{label_line}**Urgency:** {state.get('urgency_score', '?')}/10\n\n**Latest message:** {state.get('latest_message', '')}\n\n**Why:** {state.get('reason', 'n/a')}\n\n[Open conversation]({state['conversation_url']})"),
+        config=HumanInterruptConfig(allow_ignore=True, allow_respond=False, allow_edit=True, allow_accept=bool(state.get("suggested_reply", "").strip())),
+        description=(f"{error_prefix}{label_line}**Urgency:** {state.get('urgency_score', '?')}/10\n\n**Latest message:** {state.get('latest_message', '')}\n\n**Why:** {state.get('reason', 'n/a')}\n\n[Open conversation]({state['conversation_url']})"),
     )
 
 
@@ -124,9 +169,32 @@ def review_message(state: MessageReviewState) -> MessageReviewState:
     return message_result_from_response(responses[0], state.get("suggested_reply", ""))
 
 
+async def act_on_message(state: MessageReviewState) -> MessageReviewState:
+    await _recover_reviews(MESSAGE_GRAPH_ID)
+    action = state.get("action")
+    if action not in {"reply", "dismiss"}:
+        return {}
+    result = await perform_message_action(
+        state["conversation_url"],
+        action,
+        state.get("reply", ""),
+        state.get("latest_message", ""),
+    )
+    if result.outcome:
+        return {"outcome": result.outcome, "last_error": ""}
+    error = result.error or "The LinkedIn action failed; try again."
+    notify("LinkedIn action failed", f"{state['sender_name']}: {error}")
+    update: MessageReviewState = {"last_error": error, "action": None}
+    if result.latest_message is not None:
+        update["latest_message"] = result.latest_message
+    return update
+
+
 message_builder = StateGraph(MessageReviewState)
 message_builder.add_node("review_message", review_message)
+message_builder.add_node("act_message", act_on_message)
 message_builder.add_edge(START, "review_message")
-message_builder.add_edge("review_message", END)
+message_builder.add_conditional_edges("review_message", route_after_review, {"act": "act_message", "__end__": END})
+message_builder.add_conditional_edges("act_message", route_after_act, {"review": "review_message", "__end__": END})
 
 message_graph = message_builder.compile()
