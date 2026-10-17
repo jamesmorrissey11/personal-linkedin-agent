@@ -14,7 +14,7 @@ from langgraph.types import interrupt
 
 from linkedin_actions import perform_invitation_action, perform_message_action
 from review_queue import get_review_client, recover_stuck_reviews
-from unattended import notify
+from unattended import notify_async
 
 GRAPH_ID = "invitation_review"
 logger = logging.getLogger("review_graph")
@@ -97,7 +97,7 @@ async def act_on_invitation(state: ReviewState) -> ReviewState:
     if result.outcome:
         return {"outcome": result.outcome, "last_error": ""}
     error = result.error or "The LinkedIn action failed; try again."
-    notify("LinkedIn action failed", f"{state['name']}: {error}")
+    await notify_async("LinkedIn action failed", f"{state['name']}: {error}")
     return {"last_error": error, "decision": None}
 
 
@@ -183,7 +183,7 @@ async def act_on_message(state: MessageReviewState) -> MessageReviewState:
     if result.outcome:
         return {"outcome": result.outcome, "last_error": ""}
     error = result.error or "The LinkedIn action failed; try again."
-    notify("LinkedIn action failed", f"{state['sender_name']}: {error}")
+    await notify_async("LinkedIn action failed", f"{state['sender_name']}: {error}")
     update: MessageReviewState = {"last_error": error, "action": None}
     if result.latest_message is not None:
         update["latest_message"] = result.latest_message

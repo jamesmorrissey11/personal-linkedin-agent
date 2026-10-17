@@ -64,26 +64,53 @@ class ConversationMessage(BaseModel):
 UNKNOWN_AUTHORS = {"", "unknown", "unknown user"}
 
 
+AUTH_STATE_PATH = Path("playwright/.auth/state.json")
+
+
+def _acquire_flock(handle) -> bool:
+    """Try once to take the exclusive lock; False means another holder has it."""
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+
+
 @asynccontextmanager
 async def linkedin_lock(timeout_seconds: float, path: Path = LOCK_PATH):
-    """Hold an exclusive flock on `path`, polling once per second; raise LinkedInBusyError on timeout."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Hold an exclusive flock on `path`, polling once per second; raise LinkedInBusyError on timeout.
+
+    Every filesystem call runs in a worker thread. `langgraph dev` guards the graphs with blockbuster,
+    which turns a blocking call on the event loop into a BlockingError that aborts the action, and the
+    lock is held for the whole LinkedIn session, so blocking here would also stall the server.
+    """
+    await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
     # flock is per open file description, so each entry opens its own handle.
-    with path.open("a") as handle:
+    handle = await asyncio.to_thread(path.open, "a")
+    try:
         deadline = time.monotonic() + timeout_seconds
-        while True:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise LinkedInBusyError(f"LinkedIn is busy: could not acquire {path} within {timeout_seconds:g}s.") from None
-                await asyncio.sleep(min(1.0, remaining))
+        while not await asyncio.to_thread(_acquire_flock, handle):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LinkedInBusyError(f"LinkedIn is busy: could not acquire {path} within {timeout_seconds:g}s.") from None
+            await asyncio.sleep(min(1.0, remaining))
         try:
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            await asyncio.to_thread(fcntl.flock, handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        await asyncio.to_thread(handle.close)
+
+
+def _ensure_auth_state_sync(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text("{}")
+
+
+async def ensure_auth_state(path: Path = AUTH_STATE_PATH) -> None:
+    """Create an empty storage-state file when none exists, without blocking the event loop."""
+    await asyncio.to_thread(_ensure_auth_state_sync, path)
 
 
 @asynccontextmanager
@@ -93,15 +120,12 @@ async def open_linkedin(headless: bool, unattended: bool, approval: ApprovedActi
     When unattended (or headless) an expired session raises LoginRequiredError instead of waiting for a human.
     """
     async with linkedin_lock(lock_timeout):
-        os.makedirs("playwright/.auth", exist_ok=True)
-        if not os.path.exists("playwright/.auth/state.json"):
-            with open("playwright/.auth/state.json", "w") as f:
-                f.write("{}")
+        await ensure_auth_state()
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=headless)
             try:
-                context = await browser.new_context(storage_state="playwright/.auth/state.json")
+                context = await browser.new_context(storage_state=str(AUTH_STATE_PATH))
                 await install_linkedin_write_guard(context, approval)
                 page = await context.new_page()
                 await page.goto("https://www.linkedin.com/feed")
@@ -112,7 +136,7 @@ async def open_linkedin(headless: bool, unattended: bool, approval: ApprovedActi
                     await page.goto("https://www.linkedin.com/login")
                     await page.wait_for_url("https://www.linkedin.com/feed/**", timeout=120000)
                     logger.info("Login detected. Saving storage state...")
-                    await context.storage_state(path="playwright/.auth/state.json")
+                    await context.storage_state(path=str(AUTH_STATE_PATH))
                 yield context, page
             finally:
                 if summary := blocked_write_summary():

@@ -152,7 +152,10 @@ def patch_graph_dependencies(monkeypatch):
     async def fake_recover(*_args, **_kwargs):
         return 0
 
+    async def fake_notify_async(title, message):
+        notifications.append((title, message))
+
     monkeypatch.setattr(review_graph, "get_review_client", lambda: object())
     monkeypatch.setattr(review_graph, "recover_stuck_reviews", fake_recover)
-    monkeypatch.setattr(review_graph, "notify", lambda title, message: notifications.append((title, message)))
+    monkeypatch.setattr(review_graph, "notify_async", fake_notify_async)
     return notifications
