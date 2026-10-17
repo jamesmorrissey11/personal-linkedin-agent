@@ -69,7 +69,8 @@ A related option is VS Code Dev Containers, which will open the project in your 
     ```
 
     `uv` installs a compatible Python 3.10+ interpreter when needed and manages the project's `.venv`
-    automatically, so manual activation is not required.
+    automatically, so manual activation is not required. It also installs this project's `linkedin_agent`
+    package (in editable mode, from `src/`) and its `linkedin-agent` command, so `uv run linkedin-agent --help` works.
 
 4. Install the Playwright browser binaries (required once per environment; the Python package alone does not include them):
 
@@ -127,8 +128,8 @@ OPENAI_MODEL=gpt-4.1-mini
 You can select OpenAI for an individual run without changing `MODEL_BACKEND`:
 
 ```shell
-uv run python invitations_manager.py --model-backend openai
-uv run python inbox_manager.py --model-backend openai
+uv run linkedin-agent invitations --model-backend openai
+uv run linkedin-agent inbox --model-backend openai
 ```
 
 ## Configuring Ollama Models
@@ -149,7 +150,7 @@ Azure setup at all as long as Ollama is installed and running locally.
    Larger sizes (`gemma3:12b`, 8.1GB; `gemma3:27b`, 17GB) offer better quality/reasoning at the cost of
    slower responses and a much bigger download — set `OLLAMA_MODEL` accordingly if you have the memory and
    bandwidth for one and want to compare results. Only `gemma3:latest` (4B) has actually been validated
-   against `linkedin_invitation_cases.yaml` in this project so far; larger sizes are untested here.
+   against `evals/invitation_cases.yaml` in this project so far; larger sizes are untested here.
 
 3. Choose the backend with the `--model-backend` flag (or the `MODEL_BACKEND` env var in `.env`):
 
@@ -161,8 +162,8 @@ Azure setup at all as long as Ollama is installed and running locally.
     | `fallback` | Tries Ollama first, and falls back to Azure OpenAI if the local model call fails (e.g. Ollama isn't running). **Still requires Azure credentials to be configured** (as in `azure` mode above) since both models are constructed at startup. |
 
     ```shell
-    uv run python invitations_manager.py --model-backend ollama
-    uv run python inbox_manager.py --model-backend openai
+    uv run linkedin-agent invitations --model-backend ollama
+    uv run linkedin-agent inbox --model-backend openai
     ```
 
    To change the default without passing a flag every time, set in `.env`:
@@ -181,12 +182,12 @@ Azure setup at all as long as Ollama is installed and running locally.
     | `LLM_MAX_TOKENS` | `512` | Maximum output tokens per call. |
     | `LLM_TIMEOUT_SECONDS` | `60` | Per-request timeout. The OpenAI SDK retries timeouts twice, so the worst case is ~3× this. |
 
-   When a call fails, `inbox_manager.py` gives that conversation an urgency score of 1, and
-   `invitations_manager.py` leaves that invitation pending and moves on.
+   When a call fails, the inbox workflow still queues that conversation, labeled "Couldn't score", and
+   the invitation workflow still queues that invitation, labeled "Needs your judgment".
 
 **Known caveat:** Gemma 3's structured-output reliability through Ollama's OpenAI-compatible API is not
-as consistent as larger frontier models — in local testing against `linkedin_invitation_cases.yaml`
-(via `uv run python evals.py`), correctness scores varied between 80–100% across four separate runs with
+as consistent as larger frontier models — in local testing against `evals/invitation_cases.yaml`
+(via `uv run python -m evals.run`), correctness scores varied between 80–100% across four separate runs with
 `gemma3:latest` (4B), with no malformed/unparseable outputs observed in any run. Validate against your own
 eval cases before relying on the `ollama` or `fallback` backend for unattended runs. See
 [`docs/reports/local-model-serving-for-gemma3.md`](docs/reports/local-model-serving-for-gemma3.md) for the
@@ -194,10 +195,10 @@ full research behind this choice (framework comparison, benchmarks, licensing).
 
 ## Running the invitation manager
 
-You can run the LinkedIn agent by executing the `invitations_manager.py` script. The agent analyzes invitations and queues each proposed Accept or Ignore action for mandatory human review. This command never clicks either LinkedIn action.
+You can run the LinkedIn agent with the `linkedin-agent invitations` command. The agent analyzes invitations and queues each proposed Accept or Ignore action for mandatory human review. This command never clicks either LinkedIn action.
 
 ```shell
-uv run python invitations_manager.py
+uv run linkedin-agent invitations
 ```
 
 Every new invitation is queued, including ones the agent was undecided about or whose LLM call failed (labelled **Needs your judgment**). Invitations that already have a review are skipped without an LLM call, and scanning stops once it reaches already-known invitations.
@@ -206,7 +207,7 @@ Available flags:
 
 * `--num-to-process` (default `100`): safety cap on *new* invitations queued per run (known ones don't count). The run report says when the cap was hit.
 * `--cleanup-stale`: close pending reviews for invitations no longer on LinkedIn, only after a full, non-empty scan.
-* `--record-eval-cases`: append each processed invitation as a new case to `linkedin_invitation_cases.yaml`, for later use with `evals.py`.
+* `--record-eval-cases`: append each processed invitation as a new case to `evals/invitation_cases.yaml`, for later use with the evals (`uv run python -m evals.run`).
 * `--headless`: run the browser without a visible window.
 * `--model-backend` (`ollama` | `openai` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring OpenAI models](#configuring-openai-models) and [Configuring Ollama Models](#configuring-ollama-models).
 
@@ -214,14 +215,14 @@ On first run (or whenever the saved session expires), a browser window opens to 
 
 ## Human review with Agent Inbox
 
-Every proposed invitation action and reply-worthy message must be reviewed by a human in [Agent Inbox](https://github.com/langchain-ai/agent-inbox), included as a git submodule in `agent-inbox/`. `review_graph.py` defines two LangGraph graphs that pause with an `interrupt`: `invitation_review` (**Accept** / **Ignore**) and `message_review` (**Accept** the suggested reply, **Edit** it, or **Ignore**). Your decision is the action: the graph immediately accepts or ignores the invitation, sends the exact submitted reply, or archives the ignored conversation. A failed or stale action returns to Agent Inbox with a visible note instead of silently closing.
+Every proposed invitation action and reply-worthy message must be reviewed by a human in [Agent Inbox](https://github.com/langchain-ai/agent-inbox), included as a git submodule in `agent-inbox/`. `src/linkedin_agent/review/graphs.py` defines two LangGraph graphs that pause with an `interrupt`: `invitation_review` (**Accept** / **Ignore**) and `message_review` (**Accept** the suggested reply, **Edit** it, or **Ignore**). Your decision is the action: the graph immediately accepts or ignores the invitation, sends the exact submitted reply, or archives the ignored conversation. A failed or stale action returns to Agent Inbox with a visible note instead of silently closing.
 
 1. Fetch the UI and install it (requires Node.js and yarn): `git submodule update --init && git -C agent-inbox apply ../patches/agent-inbox-fixes.patch && (cd agent-inbox && yarn install)`. The patch fixes nested `<p>` hydration errors, applies styling outside `react-markdown` instead of passing its removed `className` prop, and makes a scheme-less Deployment URL (e.g. `localhost:2024`) default to `http://` instead of throwing "Invalid URL". Skip the apply if already applied.
 2. Start the LangGraph server: `uv run langgraph dev --no-browser --no-reload` (serves `http://localhost:2024`; disabling reload prevents an edit from interrupting an action)
 3. Start the UI: `cd agent-inbox && yarn dev` and open <http://localhost:3000>. In **Settings**, enter your LangSmith API key, then **Add Inbox** with Deployment URL `http://localhost:2024` and Assistant/Graph ID `invitation_review`. Add a second inbox with Graph ID `message_review` for messages.
-4. Analyze invitations and queue every one for review: `uv run python invitations_manager.py`
+4. Analyze invitations and queue every one for review: `uv run linkedin-agent invitations`
 5. Resolve an invitation in Agent Inbox. **Accept** or **Ignore** acts on LinkedIn immediately and closes the item only after the action succeeds.
-6. Messages: `uv run python inbox_manager.py [--min-urgency 4]` queues every conversation where the other person spoke last. Urgency is a label (`Low urgency`, `Couldn't score`), not a filter. **Accept** sends the suggested reply, **Edit** sends the exact edited text, and **Ignore** archives the conversation. Accept is hidden when there is no non-empty suggestion.
+6. Messages: `uv run linkedin-agent inbox [--min-urgency 4]` queues every conversation where the other person spoke last. Urgency is a label (`Low urgency`, `Couldn't score`), not a filter. **Accept** sends the suggested reply, **Edit** sends the exact edited text, and **Ignore** archives the conversation. Accept is hidden when there is no non-empty suggestion.
 
 Newsletter invitations are left pending because the current scraper cannot reliably identify both actions for those non-profile cards. They are never ignored automatically.
 
@@ -229,21 +230,21 @@ Environment variables (read from the environment or `.env`, never logged): `LANG
 
 ## No LinkedIn action happens without human approval
 
-**Nothing is accepted, ignored, sent, or archived on LinkedIn unless you chose it for that one item in Agent Inbox. The LLM only suggests.** Deleting, reporting, blocking, leaving, recalling, or bulk-approving remains unsupported. `linkedin_guard.py` enforces this in layers:
+**Nothing is accepted, ignored, sent, or archived on LinkedIn unless you chose it for that one item in Agent Inbox. The LLM only suggests.** Deleting, reporting, blocking, leaving, recalling, or bulk-approving remains unsupported. `src/linkedin_agent/linkedin/guard.py` enforces this in layers:
 
 1. **Sync contexts are read-only:** the managers and daily job use the default-deny network and composer guards, including blocked read receipts and presence writes.
-2. **Action contexts are single-use:** `linkedin_actions.py` opens one guarded context with an `ApprovedAction` for only the chosen send, archive, accept, or ignore operation.
+2. **Action contexts are single-use:** `src/linkedin_agent/linkedin/actions.py` opens one guarded context with an `ApprovedAction` for only the chosen send, archive, accept, or ignore operation.
 3. **Exact-text sends:** the action fills the exact submitted reply, verifies the composer contents, allows one send request, and confirms the sent text before closing.
 4. **Stale-state checks:** a new incoming message or a reply already made on LinkedIn stops the action and returns the item for a fresh decision. A repeated action never blindly replays.
-5. **No LLM actuators:** the agents expose no tools; only `review_graph.py` calls the action functions after an Agent Inbox interrupt resumes.
+5. **No LLM actuators:** the agents expose no tools; only `review/graphs.py` calls the action functions after an Agent Inbox interrupt resumes.
 6. **CI architecture tests:** `tests/unit/test_no_message_writes.py` limits composer/write selectors to the action module and verifies every action context and guarded click carries an approval.
 
 ## Daily unattended workflow
 
-`daily_run.py` is sync-only. It runs in this order: (1) recover interrupted review actions and retire legacy pre-live-action decisions, (2) close invitations and conversations already handled directly on LinkedIn, (3) propose new invitations and messages, and (4) post a summary notification. It never accepts, ignores, sends, or archives anything. The rule is **fail open**: when unsure, an item stays queued rather than being hidden.
+`linkedin-agent daily` is sync-only. It runs in this order: (1) recover interrupted review actions and retire legacy pre-live-action decisions, (2) close invitations and conversations already handled directly on LinkedIn, (3) propose new invitations and messages, and (4) post a summary notification. It never accepts, ignores, sends, or archives anything. The rule is **fail open**: when unsure, an item stays queued rather than being hidden.
 
 ```shell
-uv run python daily_run.py --headless
+uv run linkedin-agent daily --headless
 ```
 
 * Exit codes: `0` success, `1` health failure (e.g. a scrape returned zero items, so nothing is closed), `2` LinkedIn login needed (a macOS notification is posted instead of waiting). Logs go to `logs/daily_run.log`.
@@ -254,10 +255,10 @@ uv run python daily_run.py --headless
 
 ## Running the inbox manager
 
-`inbox_manager.py` is a separate script that scans your LinkedIn conversations until it reaches ones already handled, uses an LLM to score each new thread's reply urgency (1-10), queues every conversation where someone else spoke last for mandatory review, and opens the highest-priority conversation (interactive runs only). Opening a conversation is read-only; the script never sends a message.
+`linkedin-agent inbox` is a separate command that scans your LinkedIn conversations until it reaches ones already handled, uses an LLM to score each new thread's reply urgency (1-10), queues every conversation where someone else spoke last for mandatory review, and opens the highest-priority conversation (interactive runs only). Opening a conversation is read-only; the script never sends a message.
 
 ```shell
-uv run python inbox_manager.py
+uv run linkedin-agent inbox
 ```
 
 Available flags:
@@ -270,20 +271,20 @@ Available flags:
 
 It reuses the same `playwright/.auth/state.json` login session as the invitation manager.
 
-> **Note:** `inbox_manager.py` builds its Azure OpenAI client differently than `invitations_manager.py` (different base URL construction, model class, and credential type). See [Architecture](#architecture) for details.
+> **Note:** the inbox workflow builds its Azure OpenAI client differently than the invitation workflow (different base URL construction and credential type). Both variants are kept, deliberately, in `src/linkedin_agent/llm.py`. See [Architecture](#architecture) for details.
 
 ## Running evaluations
 
-This project includes evaluations using Pydantic-AI evals to measure the agent's performance. You can run the evaluations by executing the `evals.py` script.
+This project includes evaluations using Pydantic-AI evals to measure the agent's performance. You can run the evaluations with `uv run python -m evals.run`.
 
-`evals.py` imports the `agent` object directly from `invitations_manager.py`, so it evaluates whichever backend `MODEL_BACKEND` resolves to at import time (`ollama` by default — see [Configuring Ollama Models](#configuring-ollama-models)). To evaluate against OpenAI or Azure OpenAI instead, set the corresponding backend before running:
+The evals use the invitation workflow's decision agent, so they evaluate whichever backend `MODEL_BACKEND` resolves to (`ollama` by default — see [Configuring Ollama Models](#configuring-ollama-models)). To evaluate against OpenAI or Azure OpenAI instead, set the corresponding backend before running:
 
 ```shell
-MODEL_BACKEND=openai uv run python evals.py
-MODEL_BACKEND=azure uv run python evals.py
+MODEL_BACKEND=openai uv run python -m evals.run
+MODEL_BACKEND=azure uv run python -m evals.run
 ```
 
-Recorded/appended cases (via `invitations_manager.py --record-eval-cases`) include a `metadata.model_name` field identifying which model actually produced each decision (useful when running in `fallback` mode, since the local model may have failed over to Azure for a given call).
+Recorded/appended cases (via `linkedin-agent invitations --record-eval-cases`) include a `metadata.model_name` field identifying which model actually produced each decision (useful when running in `fallback` mode, since the local model may have failed over to Azure for a given call).
 
 ## Cost estimate
 
@@ -292,6 +293,21 @@ On average, each LinkedIn invitation processed by the agent requires approximate
 OpenAI and Azure OpenAI cost depends on the selected model and usage. See the [OpenAI API pricing page](https://openai.com/api/pricing/) and [Azure OpenAI pricing page](https://azure.microsoft.com/pricing/details/cognitive-services/openai-service/).
 
 ## Architecture
+
+All Python code is one package, `src/linkedin_agent/`, run through `uv run linkedin-agent <command>`:
+
+```text
+src/linkedin_agent/
+  cli.py          # `linkedin-agent invitations | inbox | daily`
+  invitations.py  # invitation workflow: agent, prompt, propose and sync
+  inbox.py        # inbox workflow: urgency agent, prompt, propose and sync
+  daily.py        # the unattended daily sync
+  llm.py          # model backends (Ollama, OpenAI, Azure OpenAI, fallback)
+  runtime.py      # shared errors, run counts, logging setup, notifications
+  linkedin/       # Playwright and LinkedIn: models, session, pages, guard, actions
+  review/         # LangGraph and Agent Inbox: graphs, queue
+evals/            # developer-only evals: `uv run python -m evals.run`
+```
 
 For a deeper dive into each stack's purpose, modules, data layer, and known tech debt, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 

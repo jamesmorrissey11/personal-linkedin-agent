@@ -9,33 +9,34 @@ A single-stack Python project: an AI-powered LinkedIn automation agent. An LLM (
 Azure OpenAI via [Pydantic AI](https://ai.pydantic.dev/)) makes accept/ignore/urgency decisions, and
 [Playwright](https://playwright.dev/python/) executes them against the live LinkedIn UI. There is a
 supporting Azure infra stack (Bicep/`azd`) that provisions the Azure OpenAI resource the agents call.
-There is no frontend/backend split or database; browser/session and action helpers are small root modules.
+There is no frontend/backend split or database. The Python code is one installable package, `src/linkedin_agent/`, with a single CLI, `linkedin-agent`.
 
 ## Entry points
 
-| File | Role |
+| Path | Role |
 |---|---|
-| `invitations_manager.py` | Main CLI. Scrapes invitation cards, runs a `pydantic_ai.Agent` to propose accept/ignore/undecided, and queues actionable proposals for mandatory review. Falls back to loading the full profile page when undecided. |
-| `inbox_manager.py` | Secondary CLI. Scrapes recent conversations, runs a separate `Agent` to score each thread's reply urgency (1-10), opens the highest-priority thread. |
-| `evals.py` | Runs `pydantic_evals` regression checks (`CorrectDecisionEvaluator`, `IsInstance`) against the invitation-decision agent, using cases from `linkedin_invitation_cases.yaml`. Imports `agent` directly from `invitations_manager`. |
-| `daily_run.py` | Sync-only unattended orchestrator (recover/retire → close handled → propose → summary). It never writes to LinkedIn and exits non-zero on expired login/health failure. `unattended.py` holds shared errors, `ReviewCounts`, and `notify`; launchd templates live in `scheduling/`. |
-| `linkedin_pages.py` | Read-only Playwright selectors/helpers, cached-login context, and cross-process `linkedin_lock`. |
-| `linkedin_actions.py` | The only LinkedIn mutation module: re-checks live state and performs one explicitly approved accept/ignore/send/archive action. |
-| `linkedin_guard.py` | Default-deny write safety layer: network route guard, `safe_click`, composer-input block, blocked-attempt log, and single-use `ApprovedAction` allowances. |
-| `review_graph.py` | LangGraph graphs `invitation_review` and `message_review` (`langgraph.json`, served by `uv run langgraph dev --no-reload`) that interrupt for mandatory human review, then call `linkedin_actions.py`; failures loop back with a visible note. `review_queue.py` is the shared SDK client. The Agent Inbox UI lives in the `agent-inbox/` git submodule (excluded from ruff). |
+| `src/linkedin_agent/cli.py` | The `linkedin-agent` command (`[project.scripts]`): `invitations`, `inbox`, and `daily` subcommands. Loads `.env` and sets up logging at startup; nothing happens at import. |
+| `src/linkedin_agent/invitations.py` | Invitation workflow: scrapes invitation cards, runs a `pydantic_ai.Agent` to propose accept/ignore/undecided, and queues every new invitation for mandatory review. Falls back to loading the full profile page when undecided. |
+| `src/linkedin_agent/inbox.py` | Inbox workflow: scans conversations until caught up, runs a separate `Agent` to score reply urgency (1-10) and suggest a reply, queues conversations where someone else spoke last, and opens the highest-priority thread in interactive runs. |
+| `src/linkedin_agent/daily.py` | Sync-only unattended orchestrator (recover/retire → close handled → propose → summary). It never writes to LinkedIn and exits non-zero on expired login/health failure. launchd templates live in `scheduling/`. |
+| `src/linkedin_agent/llm.py` | Every model backend (`ollama`, `openai`, `azure`, `fallback`), with the two preserved Azure client variants. `runtime.py` holds shared errors, `ReviewCounts`, logging setup, and `notify`. |
+| `src/linkedin_agent/linkedin/` | Everything that touches Playwright/LinkedIn: `models.py`, `session.py` (cached-login context, cross-process lock), `pages.py` (read-only selectors/helpers), `guard.py` (default-deny write guard, `safe_click`, single-use `ApprovedAction`), and `actions.py` (the only mutation module: one explicitly approved accept/ignore/send/archive). |
+| `src/linkedin_agent/review/` | Everything that touches LangGraph/Agent Inbox: `graphs.py` (graphs `invitation_review` and `message_review`, served by `uv run langgraph dev --no-reload` via `langgraph.json`, which interrupt for review and then call `linkedin/actions.py`) and `queue.py` (the SDK client). The Agent Inbox UI lives in the `agent-inbox/` git submodule (excluded from ruff). |
+| `evals/run.py` | `pydantic_evals` regression checks (`CorrectDecisionEvaluator`, `IsInstance`) against the invitation-decision agent, using `evals/invitation_cases.yaml`. Developer-only; not part of the package. |
 
-Run them directly, e.g.:
+Run them with `uv run`, e.g.:
 
 ```shell
-uv run python invitations_manager.py --num-to-process 10 [--record-eval-cases] [--headless]
-uv run python inbox_manager.py --num-messages 20
-uv run python evals.py
+uv run linkedin-agent invitations --num-to-process 10 [--record-eval-cases] [--headless]
+uv run linkedin-agent inbox --num-messages 20
+uv run linkedin-agent daily --headless
+uv run python -m evals.run
 ```
 
 ## Safety invariant
 
 Nothing is accepted, ignored, sent, or archived on LinkedIn unless the human chose it for that one item in
-Agent Inbox; the LLM only suggests. Sync contexts remain fully read-only. `linkedin_actions.py` is the only
+Agent Inbox; the LLM only suggests. Sync contexts remain fully read-only. `linkedin/actions.py` is the only
 mutation module, and every action uses a matching single-use `ApprovedAction`, re-checks live state, and
 verifies exact reply text. Deleting, reporting, blocking, leaving, recalling, bulk actions, and LLM-initiated
 actions remain forbidden. `tests/unit/test_no_message_writes.py` fails CI on architecture violations.
@@ -47,7 +48,7 @@ automatically for matching files — don't duplicate them here:
 
 | File | Applies to | Covers |
 |---|---|---|
-| `instructions/python.instructions.md` | `*.py` | Client-setup divergence between the two manager scripts, no-shared-module/inline-prompt/LLM-judgment conventions, session-state file, scraping fallback chains, ruff lint/format, `evals.py` usage |
+| `instructions/python.instructions.md` | `**/*.py` | Package layout, import-time rules, the preserved Azure client variants, inline-prompt/LLM-judgment conventions, session-state file, scraping fallback chains, ruff lint/format, evals usage |
 | `instructions/infra.instructions.md` | `infra/**` | Bicep resource scope, keeping `write_dot_env.sh`/`.ps1` in sync, not running `azd provision`/`azd down` unprompted |
 | `instructions/markdown.instructions.md` | `**/*.md` | Formatting generated Markdown for the Clearance macOS app |
 
@@ -70,7 +71,7 @@ automatically for matching files — don't duplicate them here:
 - Preserve the originating human prompt in the issue's "Originating Prompt" section.
 - Don't close, implement, or modify issues labeled `sample`.
 - PRs use `.github/pull_request_template.md` and link the issue with `Closes #N`.
-- CI (`.github/workflows/ci.yaml`) runs ruff and pytest on PRs; `evals.py` is run manually.
+- CI (`.github/workflows/ci.yaml`) runs ruff and pytest on PRs; the evals (`uv run python -m evals.run`) are run manually.
 
 ## Maintaining this file
 

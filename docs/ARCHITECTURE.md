@@ -26,33 +26,38 @@ AI-assisted LinkedIn triage. An LLM (via [Pydantic AI](https://ai.pydantic.dev/)
 
 ### Entry points
 
+All Python code lives in one installable package, `src/linkedin_agent/`, run through a single command, `uv run linkedin-agent <invitations|inbox|daily>` (`cli.py`). Importing any module has no side effects: `.env` is loaded and logging is set up when a command starts.
+
 | File | Role |
 |---|---|
-| `invitations_manager.py` | Scans pending invitations, asks an `Agent` to propose accept/ignore/undecided for each, and queues every new one for review in Agent Inbox. Also closes reviews for invitations that are no longer pending on LinkedIn. Never clicks Accept or Ignore. See [Running the invitation manager](../README.md#running-the-invitation-manager). |
-| `inbox_manager.py` | Scans conversations until it is caught up, asks a separate `Agent` to score reply urgency (1-10) and suggest a reply, and queues every conversation where the other person spoke last. Also closes reviews for conversations James replied to or archived on LinkedIn. In interactive runs it opens the highest-priority thread. Never writes to LinkedIn. See [Running the inbox manager](../README.md#running-the-inbox-manager). |
-| `daily_run.py` | Unattended daily sync, scheduled by launchd at 06:30 (`scheduling/`): recovers stuck reviews, closes items already handled on LinkedIn, then proposes new items. Read-only on LinkedIn. See [Daily unattended workflow](../README.md#daily-unattended-workflow). |
-| `review_graph.py` | The two LangGraph graphs, `invitation_review` and `message_review`, served by `uv run langgraph dev` via `langgraph.json`. Each pauses for a human decision and then runs an `act` node that performs exactly that decision through `linkedin_actions.py`. |
-| `evals.py` | Runs `pydantic_evals` regression checks (`CorrectDecisionEvaluator`, `IsInstance`) against the invitation-decision agent using cases from `linkedin_invitation_cases.yaml`. Since `agent` is imported directly from `invitations_manager`, it evaluates against whatever `MODEL_BACKEND` resolves to (`ollama` by default). |
+| `src/linkedin_agent/invitations.py` (`linkedin-agent invitations`) | Scans pending invitations, asks an `Agent` to propose accept/ignore/undecided for each, and queues every new one for review in Agent Inbox. Also closes reviews for invitations that are no longer pending on LinkedIn. Never clicks Accept or Ignore. See [Running the invitation manager](../README.md#running-the-invitation-manager). |
+| `src/linkedin_agent/inbox.py` (`linkedin-agent inbox`) | Scans conversations until it is caught up, asks a separate `Agent` to score reply urgency (1-10) and suggest a reply, and queues every conversation where the other person spoke last. Also closes reviews for conversations James replied to or archived on LinkedIn. In interactive runs it opens the highest-priority thread. Never writes to LinkedIn. See [Running the inbox manager](../README.md#running-the-inbox-manager). |
+| `src/linkedin_agent/daily.py` (`linkedin-agent daily`) | Unattended daily sync, scheduled by launchd at 06:30 (`scheduling/`): recovers stuck reviews, closes items already handled on LinkedIn, then proposes new items. Read-only on LinkedIn. See [Daily unattended workflow](../README.md#daily-unattended-workflow). |
+| `src/linkedin_agent/review/graphs.py` | The two LangGraph graphs, `invitation_review` and `message_review`, served by `uv run langgraph dev` via `langgraph.json`. Each pauses for a human decision and then runs an `act` node that performs exactly that decision through `linkedin/actions.py`. |
+| `evals/run.py` (`uv run python -m evals.run`) | Runs `pydantic_evals` regression checks (`CorrectDecisionEvaluator`, `IsInstance`) against the invitation-decision agent using cases from `evals/invitation_cases.yaml`. It evaluates against whatever `MODEL_BACKEND` resolves to (`ollama` by default). Developer-only; not part of the package. |
 
 ### Shared modules
 
 | File | Role |
 |---|---|
-| `linkedin_pages.py` | Read-only browser primitives: `open_linkedin` (logged-in session, login detection, the cross-process LinkedIn lock, and the write guard), invitation and conversation scraping helpers with their selector fallback chains, and the shared domain models. |
-| `linkedin_guard.py` | The write guard: a network-layer block on LinkedIn messaging writes, a composer-input guard, and `safe_click`, which refuses destructive-looking controls unless an approval covers them. Safety-critical. |
-| `linkedin_actions.py` | The only code that changes anything on LinkedIn: accept/ignore an invitation, send a reply, archive a conversation. Each action re-checks LinkedIn first and counts as done only once LinkedIn confirms it. Called only from `review_graph.py`. Safety-critical. |
-| `review_queue.py` | LangGraph SDK client for Agent Inbox threads: enqueue, de-duplicate, close as superseded, and recover stuck reviews. |
-| `unattended.py` | Shared errors (`LoginRequiredError`, `HealthCheckError`), `ReviewCounts`, and macOS notifications. |
+| `src/linkedin_agent/llm.py` | Every model backend, built on demand (env vars are read then, not at import). Keeps the two workflows' Azure OpenAI client setups side by side behind an explicit `azure_variant`. |
+| `src/linkedin_agent/linkedin/session.py` | `open_linkedin`: the logged-in session, login detection, the cross-process LinkedIn lock, and the write guard. |
+| `src/linkedin_agent/linkedin/pages.py` | Read-only invitation and conversation scraping helpers with their selector fallback chains. |
+| `src/linkedin_agent/linkedin/models.py` | Shared domain models (`Invitation`, `InvitationDecision`, `ConversationMessage`, `InboxMessage`, `MessageRanking`). |
+| `src/linkedin_agent/linkedin/guard.py` | The write guard: a network-layer block on LinkedIn messaging writes, a composer-input guard, and `safe_click`, which refuses destructive-looking controls unless an approval covers them. Safety-critical. |
+| `src/linkedin_agent/linkedin/actions.py` | The only code that changes anything on LinkedIn: accept/ignore an invitation, send a reply, archive a conversation. Each action re-checks LinkedIn first and counts as done only once LinkedIn confirms it. Called only from `review/graphs.py`. Safety-critical. |
+| `src/linkedin_agent/review/queue.py` | LangGraph SDK client for Agent Inbox threads: enqueue, de-duplicate, close as superseded, and recover stuck reviews. |
+| `src/linkedin_agent/runtime.py` | Shared errors (`LoginRequiredError`, `HealthCheckError`), `ReviewCounts`, console logging setup, and macOS notifications. |
 
 ### Review workflow
 
 ```mermaid
 flowchart LR
-    A[daily_run.py<br/>or a manager CLI] -->|read-only scrape + LLM proposal| B[review_queue.py]
-    B --> C[LangGraph server<br/>review_graph.py]
+    A[linkedin-agent daily<br/>or invitations/inbox] -->|read-only scrape + LLM proposal| B[review/queue.py]
+    B --> C[LangGraph server<br/>review/graphs.py]
     C <--> D[Agent Inbox UI]
     D -->|James decides one item| C
-    C -->|act node| E[linkedin_actions.py]
+    C -->|act node| E[linkedin/actions.py]
     E -->|one approved write| F[LinkedIn]
 ```
 
@@ -70,11 +75,11 @@ Every LinkedIn write needs an explicit human decision on that one item:
 * Every browser context gets the write guard. Scraping and sync contexts get no approval, so every messaging write, including read receipts, is blocked and nothing is marked read.
 * An action context gets one `ApprovedAction`, which allows exactly one primary write of the approved kind (send or archive), confirmed against LinkedIn's real endpoints.
 * A reply sends the exact submitted text once.
-* `tests/unit/test_no_message_writes.py` enforces the architecture: no clicks outside `safe_click`, no typing outside `linkedin_actions.py`, action functions called only from `review_graph.py`, and LLM agents with no tools. `tests/unit/test_linkedin_guard.py`, `tests/unit/test_linkedin_actions.py`, and `tests/playwright/test_linkedin_actions.py` cover the guard and actions.
+* `tests/unit/test_no_message_writes.py` enforces the architecture: no clicks outside `safe_click`, no typing outside `linkedin/actions.py`, action functions called only from `review/graphs.py`, and LLM agents with no tools. `tests/unit/test_linkedin_guard.py`, `tests/unit/test_linkedin_actions.py`, and `tests/playwright/test_linkedin_actions.py` cover the guard and actions.
 
 ### Model backend selection
 
-Both entry points build their Pydantic AI model via a `build_model(backend)` function (`invitations_manager.py:build_model`, `inbox_manager.py:build_model`), selectable per-script via a `--model-backend {ollama,openai,azure,fallback}` CLI flag or the `MODEL_BACKEND` env var:
+Both workflows build their Pydantic AI model with `llm.build_model(backend, azure_variant)`, selectable per command via a `--model-backend {ollama,openai,azure,fallback}` CLI flag or the `MODEL_BACKEND` env var:
 
 * **`ollama` (default)** — local [Ollama](https://ollama.com) server via Pydantic AI's `OllamaModel`/`OllamaProvider`, targeting `OLLAMA_MODEL` (default `gemma3:latest`, the 4B tag) at `OLLAMA_BASE_URL` (default `http://localhost:11434/v1`). No Azure credentials are read or required in this mode.
 * **`openai`** — the OpenAI API (`OPENAI_API_KEY`, `OPENAI_MODEL`). See [Configuring OpenAI models](../README.md#configuring-openai-models).
@@ -87,16 +92,16 @@ Azure client construction is lazy (inside `build_azure_model()`), so importing e
 
 No database. All state is file-based:
 
-* `playwright/.auth/state.json` — cached Playwright browser storage state (cookies/session) written after a manual LinkedIn login, so subsequent runs skip re-authenticating. Used by every LinkedIn session through `linkedin_pages.open_linkedin`.
+* `playwright/.auth/state.json` — cached Playwright browser storage state (cookies/session) written after a manual LinkedIn login, so subsequent runs skip re-authenticating. Used by every LinkedIn session through `linkedin.session.open_linkedin`.
 * `playwright/.auth/linkedin.lock` — the cross-process lock that keeps the daily sync, manager runs, and Agent Inbox actions from using LinkedIn at the same time.
 * `.langgraph_api/` — the `langgraph dev` server's store: Agent Inbox review history and the de-duplication state the daily sync relies on. Deleting it brings back handled items. It lives in whichever directory the server starts from, so a server started from another checkout or worktree shows a different inbox (see #47).
 * `logs/` — `daily_run.log` and launchd output. Disposable.
-* `linkedin_invitation_cases.yaml` — eval dataset consumed by `evals.py`; also appended to at runtime by `invitations_manager.py` when run with `--record-eval-cases`.
+* `evals/invitation_cases.yaml` — eval dataset consumed by `evals/run.py`; also appended to at runtime by `linkedin-agent invitations --record-eval-cases`.
 * `.env` — Azure OpenAI endpoint/deployment config, generated post-provision by `infra/write_dot_env.sh` / `.ps1` (see [Azure Infra Stack](#azure-infra-stack)); also where `MODEL_BACKEND`/`OLLAMA_BASE_URL`/`OLLAMA_MODEL` may optionally be set (these are not `azd`-provisioned outputs, so they are not written by the postprovision hooks).
 
 ### Templates
 
-None. LLM system prompts are inline Python strings in `invitations_manager.py` (invitation accept/ignore rules) and `inbox_manager.py` (message urgency scoring rules) — there is no shared prompt-template mechanism.
+None. LLM system prompts are inline Python strings in `invitations.py` (invitation accept/ignore rules) and `inbox.py` (message urgency scoring rules) — there is no shared prompt-template mechanism.
 
 ### Dependency management
 
@@ -121,14 +126,13 @@ Provisions the Azure OpenAI resource (`gpt-5.5` deployment, per `infra/main.bice
 
 ## Known Issues / Tech Debt
 
-* **`inbox_manager.py`'s Azure OpenAI client setup diverges from `invitations_manager.py`.** Both now use `OpenAIChatModel`, but `invitations_manager.py:build_azure_model` uses `base_url=AZURE_OPENAI_ENDPOINT + "/openai/v1"` with an async `AzureDeveloperCliCredential`, while `inbox_manager.py:build_azure_model` uses the bare endpoint with a sync `DefaultAzureCredential`. This is documented, intentional-until-decided tech debt (see `.github/instructions/python.instructions.md`); #48 must preserve or explicitly resolve it.
-* **Heavy reliance on CSS selectors / `aria-label` scraping**: invitation cards and conversations in `linkedin_pages.py` (`INVITATION_CARD_SELECTORS`, `get_invitation_info`, `extract_conversation_messages`), the conversation list in `inbox_manager.py` (`get_inbox_messages`), and the message composer, send button, and archive menu in `linkedin_actions.py`. LinkedIn markup changes will silently break scraping with no compile-time signal. LinkedIn's write endpoints can change too; the guard and actions match the endpoints confirmed against live traffic on 2026-10-17.
-* **No automated live coverage**: fixture-based Playwright tests cover scraping, the guard, and the actions, unit tests cover the review graphs, queue, and daily cadence, and `evals.py` checks invitation-decision quality. Behavior against the live LinkedIn site is verified only manually.
-* **Duplicated boilerplate** between `invitations_manager.py` and `inbox_manager.py`: logging setup, CLI parsing, model builders, and `LLM_MODEL_SETTINGS` are implemented twice. Browser session handling is shared through `linkedin_pages.py`. #48 proposes consolidating the rest.
+* **The two workflows use different Azure OpenAI client setups.** `llm.build_azure_model("invitations")` uses `base_url=AZURE_OPENAI_ENDPOINT + "/openai/v1"` with an async `AzureDeveloperCliCredential`; `llm.build_azure_model("inbox")` uses the bare endpoint with a sync `DefaultAzureCredential`. James chose to preserve both in #48 rather than unify them. This is documented, intentional-until-decided tech debt (see `.github/instructions/python.instructions.md`).
+* **Heavy reliance on CSS selectors / `aria-label` scraping**: invitation cards and conversations in `linkedin/pages.py` (`INVITATION_CARD_SELECTORS`, `get_invitation_info`, `extract_conversation_messages`), the conversation list in `inbox.py` (`get_inbox_messages`), and the message composer, send button, and archive menu in `linkedin/actions.py`. LinkedIn markup changes will silently break scraping with no compile-time signal. LinkedIn's write endpoints can change too; the guard and actions match the endpoints confirmed against live traffic on 2026-10-17.
+* **No automated live coverage**: fixture-based Playwright tests cover scraping, the guard, and the actions, unit tests cover the review graphs, queue, and daily cadence, and the evals (`evals/run.py`) check invitation-decision quality. Behavior against the live LinkedIn site is verified only manually.
 * **`ruff` `line-length = 1000`** (`pyproject.toml`) effectively disables line-length linting.
 
 ## Unenforced Rules
 
-* The invitation accept/ignore business rules ("always ignore wealth/financial advisors", "always ignore coaches", "ignore recruiters") live entirely in the LLM system prompt in `invitations_manager.py` — there is no deterministic keyword/regex check backing these up if the model misclassifies.
+* The invitation accept/ignore business rules ("always ignore wealth/financial advisors", "always ignore coaches", "ignore recruiters") live entirely in the LLM system prompt in `invitations.py` — there is no deterministic keyword/regex check backing these up if the model misclassifies.
 * `.pre-commit-config.yaml` defines lint/format/whitespace hooks that CI doesn't run as such. CI (`.github/workflows/ci.yaml`) does run `ruff check`, `ruff format --check`, and `pytest`, plus the Agent Inbox UI tests, lint, and typecheck, on pull requests.
-* `linkedin_invitation_cases.yaml` has no schema validation on write — `run_and_log_agent` in `invitations_manager.py` appends freeform YAML with no deduplication.
+* `evals/invitation_cases.yaml` has no schema validation on write — `run_and_log_agent` in `invitations.py` appends freeform YAML with no deduplication.
