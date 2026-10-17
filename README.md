@@ -172,7 +172,7 @@ full research behind this choice (framework comparison, benchmarks, licensing).
 
 ## Running the invitation manager
 
-You can run the LinkedIn agent by executing the `invitations_manager.py` script. The agent will process LinkedIn invitations based on the decision logic defined in the code.
+You can run the LinkedIn agent by executing the `invitations_manager.py` script. The agent analyzes invitations and queues each proposed Accept or Ignore action for mandatory human review. This command never clicks either LinkedIn action.
 
 ```shell
 uv run python invitations_manager.py --num-to-process 10
@@ -183,7 +183,6 @@ Available flags:
 * `--num-to-process` (default `10`): number of invitations to process before stopping.
 * `--record-eval-cases`: append each processed invitation as a new case to `linkedin_invitation_cases.yaml`, for later use with `evals.py`.
 * `--headless`: run the browser without a visible window.
-* `--send-to-inbox`: send invitations the agent is still undecided about (after the profile fallback) to Agent Inbox for human review, leaving them pending. See [Human review with Agent Inbox](#human-review-with-agent-inbox).
 * `--apply-inbox-decisions`: apply accept/ignore decisions a human already made in Agent Inbox.
 * `--model-backend` (`ollama` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring Ollama Models](#configuring-ollama-models).
 
@@ -191,20 +190,22 @@ On first run (or whenever the saved session expires), a browser window opens to 
 
 ## Human review with Agent Inbox
 
-Undecided invitations and reply-worthy messages can be reviewed by a human in [Agent Inbox](https://github.com/langchain-ai/agent-inbox), included as a git submodule in `agent-inbox/`. `review_graph.py` defines two LangGraph graphs that pause with an `interrupt`: `invitation_review` (**Accept** / **Ignore**) and `message_review` (**Accept** the suggested reply, **Edit** it, or **Ignore**).
+Every proposed invitation action and reply-worthy message must be reviewed by a human in [Agent Inbox](https://github.com/langchain-ai/agent-inbox), included as a git submodule in `agent-inbox/`. `review_graph.py` defines two LangGraph graphs that pause with an `interrupt`: `invitation_review` (**Accept** / **Ignore**) and `message_review` (**Accept** the suggested reply, **Edit** it, or **Ignore**). Queue failures stop the proposal workflow rather than falling back to a LinkedIn action.
 
 1. Fetch the UI and install it (requires Node.js and yarn): `git submodule update --init && git -C agent-inbox apply ../patches/agent-inbox-fixes.patch && (cd agent-inbox && yarn install)`. The patch fixes nested `<p>` hydration errors, applies styling outside `react-markdown` instead of passing its removed `className` prop, and makes a scheme-less Deployment URL (e.g. `localhost:2024`) default to `http://` instead of throwing "Invalid URL". Skip the apply if already applied.
 2. Start the LangGraph server: `uv run langgraph dev --no-browser` (serves `http://localhost:2024`)
 3. Start the UI: `cd agent-inbox && yarn dev` and open <http://localhost:3000>. In **Settings**, enter your LangSmith API key, then **Add Inbox** with Deployment URL `http://localhost:2024` and Assistant/Graph ID `invitation_review`. Add a second inbox with Graph ID `message_review` for messages.
-4. Queue undecided invitations: `uv run python invitations_manager.py --send-to-inbox`
+4. Analyze invitations and queue every proposed Accept or Ignore action: `uv run python invitations_manager.py --num-to-process 10`
 5. Resolve them in the inbox, then apply the decisions to LinkedIn: `uv run python invitations_manager.py --apply-inbox-decisions`
-6. Messages: `uv run python inbox_manager.py --send-to-inbox [--min-urgency 4]` queues conversations at or above the urgency threshold. After reviewing them, `uv run python inbox_manager.py --apply-inbox-decisions` opens the approved conversations and prints the approved reply for you to paste. **Nothing is ever sent automatically.**
+6. Messages: `uv run python inbox_manager.py --num-messages 20 [--min-urgency 4]` queues every conversation with an actionable suggested reply at or above the urgency threshold. After reviewing them, `uv run python inbox_manager.py --apply-inbox-decisions` opens the approved conversations and prints the approved reply for you to paste. **Nothing is ever sent automatically.**
+
+Newsletter invitations are left pending because the current scraper cannot reliably identify both actions for those non-profile cards. They are never ignored automatically.
 
 Environment variables (read from the environment or `.env`, never logged): `LANGGRAPH_URL` (default `http://localhost:2024`) and `LANGSMITH_API_KEY` (falls back to `LANGSMITH_PERSONAL_ACCESS_TOKEN`; a local `langgraph dev` server doesn't check it).
 
 ## Running the inbox manager
 
-`inbox_manager.py` is a separate script that scans your recent LinkedIn conversations, uses an LLM to score each thread's reply urgency (1-10), and opens the highest-priority conversation.
+`inbox_manager.py` is a separate script that scans your recent LinkedIn conversations, uses an LLM to score each thread's reply urgency (1-10), queues actionable reply proposals for mandatory review, and opens the highest-priority conversation. Opening a conversation is read-only; the script never sends a message.
 
 ```shell
 uv run python inbox_manager.py --num-messages 20
@@ -213,8 +214,7 @@ uv run python inbox_manager.py --num-messages 20
 Available flags:
 
 * `--num-messages` (default `20`): number of recent conversations to analyze.
-* `--send-to-inbox`: send conversations at or above `--min-urgency` to Agent Inbox (graph `message_review`) for human review. See [Human review with Agent Inbox](#human-review-with-agent-inbox).
-* `--min-urgency` (default `4`): minimum urgency score (1-10) to send to Agent Inbox.
+* `--min-urgency` (default `4`): minimum urgency score (1-10) for an actionable reply proposal to be queued in Agent Inbox.
 * `--apply-inbox-decisions`: skip ranking; open conversations approved in Agent Inbox and print the approved reply. Nothing is sent.
 * `--model-backend` (`ollama` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring Ollama Models](#configuring-ollama-models).
 

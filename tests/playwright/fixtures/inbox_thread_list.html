@@ -8,6 +8,9 @@
 -->
 <html>
   <body>
+    <script>
+      window.__sendCount = 0;
+    </script>
     <main>
       <ul>
         <li class="msg-conversation-listitem">
@@ -30,5 +33,6 @@
         </li>
       </ul>
     </main>
+    <button aria-label="Send" onclick="window.__sendCount += 1">Send</button>
   </body>
 </html>
