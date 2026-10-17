@@ -162,7 +162,7 @@ When working with AI coding agents, these conventions improve output quality:
 
 ### Context Files
 
-- Maintain a `CLAUDE.md` (or equivalent agent context file) at the repo root.
+- Maintain `AGENTS.md` and `.github/copilot-instructions.md` (agent context files) at the repo root.
 - Keep it current. Outdated context files cause agent drift.
 - Include: project purpose, structure, conventions, process, and validation gates.
 

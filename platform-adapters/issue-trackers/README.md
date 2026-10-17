@@ -8,7 +8,7 @@ An **issue-trackers adapter** provides story templates and backlog conventions f
 |---------|---------|--------|-----------------|
 | [`github/`](github/) | GitHub Issues | Maintained | `.github/ISSUE_TEMPLATE/agentic-story.md` |
 
-> Additional trackers (Azure DevOps Boards, Jira, Linear, Shortcut) are on the roadmap. To propose or contribute one, see [`../../CONTRIBUTING-AGENTS.md`](../../CONTRIBUTING-AGENTS.md) §"Contributing a New Adapter".
+> Additional trackers (Azure DevOps Boards, Jira, Linear, Shortcut) are on the roadmap. To propose one, open an `agentic-story` issue.
 
 ## Adapter Contents
 
