@@ -5,8 +5,8 @@
 
 ## What this is
 
-A single-stack Python project: an AI-powered LinkedIn automation agent. An LLM (Azure OpenAI via
-[Pydantic AI](https://ai.pydantic.dev/)) makes accept/ignore/urgency decisions, and
+A single-stack Python project: an AI-powered LinkedIn automation agent. An LLM (Ollama, OpenAI, or
+Azure OpenAI via [Pydantic AI](https://ai.pydantic.dev/)) makes accept/ignore/urgency decisions, and
 [Playwright](https://playwright.dev/python/) executes them against the live LinkedIn UI. There is a
 supporting Azure infra stack (Bicep/`azd`) that provisions the Azure OpenAI resource the agents call.
 There is no frontend/backend split, no database, and no shared library — see "Entry points" below.
@@ -15,7 +15,7 @@ There is no frontend/backend split, no database, and no shared library — see "
 
 | File | Role |
 |---|---|
-| `invitations_manager.py` | Main CLI. Scrapes invitation cards, runs a `pydantic_ai.Agent` to decide accept/ignore/undecided per invitation, clicks the corresponding button. Falls back to loading the full profile page when undecided. |
+| `invitations_manager.py` | Main CLI. Scrapes invitation cards, runs a `pydantic_ai.Agent` to propose accept/ignore/undecided, and queues actionable proposals for mandatory review. Falls back to loading the full profile page when undecided. |
 | `inbox_manager.py` | Secondary CLI. Scrapes recent conversations, runs a separate `Agent` to score each thread's reply urgency (1-10), opens the highest-priority thread. |
 | `evals.py` | Runs `pydantic_evals` regression checks (`CorrectDecisionEvaluator`, `IsInstance`) against the invitation-decision agent, using cases from `linkedin_invitation_cases.yaml`. Imports `agent` directly from `invitations_manager`. |
 | `review_graph.py` | LangGraph graphs `invitation_review` and `message_review` (`langgraph.json`, served by `uv run langgraph dev`) that interrupt for mandatory human review; normal manager runs queue every proposed action, and `--apply-inbox-decisions` is the only invitation mutation path (messages are never auto-sent). `review_queue.py` is the shared SDK client. The Agent Inbox UI lives in the `agent-inbox/` git submodule (excluded from ruff). |

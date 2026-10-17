@@ -28,12 +28,13 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
-# Model backend selection: "ollama" (default, local, no Azure credentials required), "azure", or
-# "fallback" (try Ollama first, fall back to Azure OpenAI on failure). Override via MODEL_BACKEND env
-# var or the --model-backend CLI flag.
+# Model backend selection: "ollama" (default), "openai", "azure", or "fallback" (try Ollama first,
+# fall back to Azure OpenAI on failure). Override via MODEL_BACKEND env var or the --model-backend
+# CLI flag.
 MODEL_BACKEND = os.environ.get("MODEL_BACKEND", "ollama")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:latest")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
 
 # Bound every LLM call so a small local model stuck generating (Ollama runs with --context-shift, so it
 # never hits the context limit) can't stall the run. The OpenAI SDK retries timeouts twice, so the
@@ -47,6 +48,15 @@ LLM_MODEL_SETTINGS = ModelSettings(
 def build_ollama_model() -> OllamaModel:
     """Build the local Ollama model. Requires `ollama serve` running locally with OLLAMA_MODEL pulled."""
     return OllamaModel(OLLAMA_MODEL, provider=OllamaProvider(base_url=OLLAMA_BASE_URL))
+
+
+def build_openai_model() -> OpenAIChatModel:
+    """Build a standard OpenAI API model using OPENAI_API_KEY."""
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Missing required OPENAI_API_KEY for --model-backend openai. Set it in .env or choose another backend.")
+    openai_client = AsyncOpenAI(api_key=api_key)
+    return OpenAIChatModel(OPENAI_MODEL, provider=OpenAIProvider(openai_client=openai_client))
 
 
 def build_azure_model() -> OpenAIChatModel:
@@ -80,21 +90,22 @@ def build_azure_model() -> OpenAIChatModel:
 
 
 def build_model(backend: str):
-    """Build the Pydantic AI model for the given backend ("ollama", "azure", or "fallback").
+    """Build the Pydantic AI model for the given backend.
 
-    Azure credentials are only read/required when "azure" or "fallback" is selected, so the default
-    "ollama" backend never assumes Azure OpenAI is configured or reachable. Note that "fallback"
-    constructs the Azure model eagerly (FallbackModel requires both models up front), so Azure
-    credentials must still be present at startup even though Ollama is tried first at request time.
+    OpenAI and Azure credentials are read only when their corresponding backend is selected. Note that
+    "fallback" constructs the Azure model eagerly (FallbackModel requires both models up front), so
+    Azure credentials must still be present at startup even though Ollama is tried first at request time.
     """
     if backend == "ollama":
         chosen_model = build_ollama_model()
+    elif backend == "openai":
+        chosen_model = build_openai_model()
     elif backend == "azure":
         chosen_model = build_azure_model()
     elif backend == "fallback":
         chosen_model = FallbackModel(build_ollama_model(), build_azure_model())
     else:
-        raise ValueError(f"Unknown model backend: {backend!r}. Expected 'ollama', 'azure', or 'fallback'.")
+        raise ValueError(f"Unknown model backend: {backend!r}. Expected 'ollama', 'openai', 'azure', or 'fallback'.")
     logger.info("Using model backend=%s (model_name=%s)", backend, chosen_model.model_name)
     return chosen_model
 
@@ -469,7 +480,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-messages", type=int, default=20, help="Number of recent inbox messages to analyze (default: 20).")
     parser.add_argument(
         "--model-backend",
-        choices=["ollama", "azure", "fallback"],
+        choices=["ollama", "openai", "azure", "fallback"],
         default=None,
         help=f"Model backend to use (default: MODEL_BACKEND env var, currently {MODEL_BACKEND!r}).",
     )

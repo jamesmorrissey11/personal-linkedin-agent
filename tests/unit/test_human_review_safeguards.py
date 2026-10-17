@@ -1,4 +1,7 @@
+from typing import cast
+
 import pytest
+from playwright.async_api import ElementHandle
 
 import inbox_manager
 import invitations_manager
@@ -103,8 +106,9 @@ def test_only_valid_resolved_invitation_review_can_execute():
     assert invitations_manager.approved_invitation_decision({"values": {"decision": "accept"}}) is None
 
     approved = invitations_manager.approved_invitation_decision({"thread_id": "thread", "values": {"decision": "ignore"}})
+    assert approved is not None
     card = FakeInvitationCard()
-    applied = run_async_test(lambda: invitations_manager.execute_approved_action(card, approved))
+    applied = run_async_test(lambda: invitations_manager.execute_approved_action(cast(ElementHandle, card), approved))
 
     assert applied is True
     assert card.accept.clicks == 0
