@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlparse
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from linkedin_guard import ApprovedAction, safe_click
 from linkedin_pages import UNKNOWN_AUTHORS, ConversationMessage, LinkedInBusyError, collect_invitation_profiles, extract_conversation_messages, get_invitation_cards, get_invitation_info, get_logged_in_user_name, open_linkedin
 from unattended import LoginRequiredError
@@ -33,10 +35,18 @@ ARCHIVED_INDICATOR_SELECTORS = [
     "[data-view-name='message-toolbar-dropdown-toggle-archive']:has-text('Restore')",
 ]
 
+CONVERSATION_MESSAGE_SELECTOR = "li.msg-s-message-list__event"
+SEND_WRITE_MARKER = "action=createMessage"
+ARCHIVE_WRITE_MARKER = "action=addCategory"
+
 LOCK_TIMEOUT_SECONDS = 300
+CONVERSATION_LOAD_TIMEOUT_MS = 20000
+CONVERSATION_SETTLE_MS = 1500
+WRITE_CONFIRM_TIMEOUT_MS = 15000
 INVITATION_MANAGER_URL = "https://www.linkedin.com/mynetwork/invitation-manager/"
 NEW_MESSAGE_NOTE = "A new message arrived since this was queued; nothing was sent. Review it and choose again."
 ALREADY_REPLIED_NOTE = "You already replied on LinkedIn; nothing was sent. Send this too by choosing again, or Ignore."
+CONVERSATION_NOT_LOADED_NOTE = "Couldn't load the conversation on LinkedIn; nothing was sent or archived. Try again."
 
 logger = logging.getLogger("linkedin_actions")
 
@@ -50,7 +60,12 @@ class ActionResult:
 
 def normalize_text(text: str) -> str:
     normalized = text.replace("\r\n", "\n")
-    return "\n".join(line.rstrip() for line in normalized.split("\n")).rstrip()
+    return "\n".join(line.rstrip() for line in normalized.replace("\xa0", " ").split("\n")).rstrip()
+
+
+def comparable_text(text: str) -> str:
+    """Whitespace-insensitive form for matching a message against how LinkedIn re-renders it."""
+    return " ".join(text.replace("\xa0", " ").split())
 
 
 def same_profile(a: str, b: str) -> bool:
@@ -76,10 +91,10 @@ def message_precheck(
     user_name = logged_in_user.strip().casefold()
     author = latest.author.strip().casefold()
     from_user = user_name not in UNKNOWN_AUTHORS and author not in UNKNOWN_AUTHORS and author == user_name
-    latest_text = normalize_text(latest.content)
-    if action == "reply" and from_user and latest_text == normalize_text(reply):
+    latest_text = comparable_text(latest.content)
+    if action == "reply" and from_user and latest_text == comparable_text(reply):
         return "already_sent", None
-    if latest_text == normalize_text(expected_latest):
+    if latest_text == comparable_text(expected_latest):
         return "proceed", None
     if action == "dismiss" and from_user:
         return "proceed", None
@@ -106,15 +121,67 @@ async def click_invitation_button(card, decision: Literal["accept", "ignore"]) -
     return await safe_click(button, approval=ApprovedAction("invitation", decision))
 
 
+# LinkedIn's composer renders each line as <p>, blank lines as <p><br></p>, and repeated spaces as &nbsp;.
+COMPOSER_TEXT_JS = """element => {
+    const lines = [];
+    let current = null;
+    for (const node of element.childNodes) {
+        if (node.nodeName === "BR") {
+            lines.push(current ?? "");
+            current = null;
+        } else if (node.nodeName === "P" || node.nodeName === "DIV") {
+            if (current !== null) lines.push(current);
+            current = null;
+            lines.push(node.textContent ?? "");
+        } else {
+            current = (current ?? "") + (node.textContent ?? "");
+        }
+    }
+    if (current !== null) lines.push(current);
+    return lines.join("\\n").replace(/\\u00a0/g, " ");
+}"""
+
+
 async def _composer_text(composer) -> str:
-    return await composer.evaluate(
-        """element => Array.from(element.childNodes)
-            .map(node => node.nodeName === "BR" ? "\\n" : (node.innerText ?? node.textContent ?? ""))
-            .join("\\n")"""
-    )
+    return await composer.evaluate(COMPOSER_TEXT_JS)
 
 
-async def send_reply(page, text: str) -> bool:
+async def _click_and_confirm_write(page, element, approval: ApprovedAction, url_marker: str) -> bool | None:
+    """Click `element` and wait for LinkedIn to answer the resulting write.
+
+    Returns True when LinkedIn accepted the write, False when the click was refused or the write was
+    blocked/rejected, and None when no matching request was seen before the timeout.
+    """
+    outcome: list[bool] = []
+
+    def matches(request) -> bool:
+        return request.method == "POST" and url_marker in request.url
+
+    def on_response(response) -> None:
+        if matches(response.request):
+            outcome.append(response.ok)
+
+    def on_request_failed(request) -> None:
+        if matches(request):
+            outcome.append(False)
+
+    page.on("response", on_response)
+    page.on("requestfailed", on_request_failed)
+    try:
+        if not await safe_click(element, approval=approval):
+            return False
+        for _ in range(WRITE_CONFIRM_TIMEOUT_MS // 250):
+            if outcome:
+                return outcome[0]
+            await page.wait_for_timeout(250)
+        return None
+    finally:
+        page.remove_listener("response", on_response)
+        page.remove_listener("requestfailed", on_request_failed)
+
+
+async def send_reply(page, text: str) -> bool | None:
+    """Type `text` exactly and send it once. Returns True/False/None like `_click_and_confirm_write`."""
     composer = await _first_visible(page, COMPOSER_SELECTORS)
     if composer is None:
         return False
@@ -126,10 +193,11 @@ async def send_reply(page, text: str) -> bool:
     if send_button is None:
         await composer.fill("")
         return False
-    return await safe_click(send_button, approval=ApprovedAction("message", "send"))
+    return await _click_and_confirm_write(page, send_button, ApprovedAction("message", "send"), SEND_WRITE_MARKER)
 
 
 async def archive_conversation(page) -> bool:
+    """Archive the open conversation; True only once LinkedIn has accepted the archive request."""
     approval = ApprovedAction("message", "archive")
     archive_item = await _first_visible(page, ARCHIVE_MENU_ITEM_SELECTORS)
     if archive_item is None:
@@ -138,14 +206,46 @@ async def archive_conversation(page) -> bool:
             return False
         await page.wait_for_timeout(300)
         archive_item = await _first_visible(page, ARCHIVE_MENU_ITEM_SELECTORS)
-    return archive_item is not None and await safe_click(archive_item, approval=approval)
+    if archive_item is None:
+        return False
+    return await _click_and_confirm_write(page, archive_item, approval, ARCHIVE_WRITE_MARKER) is True
+
+
+async def load_conversation(page, conversation_url: str) -> bool:
+    """Open a conversation and wait until its messages have rendered; False if they never do."""
+    await page.goto(conversation_url)
+    await page.wait_for_load_state("load")
+    try:
+        await page.wait_for_selector(CONVERSATION_MESSAGE_SELECTOR, timeout=CONVERSATION_LOAD_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        return False
+    await page.wait_for_timeout(CONVERSATION_SETTLE_MS)
+    return True
+
+
+async def _archive_state_visible(page) -> bool | None:
+    if await _first_visible(page, ARCHIVED_INDICATOR_SELECTORS) is not None:
+        return True
+    if await _first_visible(page, ARCHIVE_MENU_ITEM_SELECTORS) is not None:
+        return False
+    return None
 
 
 async def conversation_is_archived(page) -> bool | None:
-    if await _first_visible(page, ARCHIVED_INDICATOR_SELECTORS) is not None:
-        return True
-    if await _first_visible(page, CONVERSATION_MENU_SELECTORS) is not None or await _first_visible(page, COMPOSER_SELECTORS) is not None:
-        return False
+    """True/False from the thread menu's Restore/Archive option; None when the state can't be read.
+
+    A thread opened by URL shows no archived marker of its own: only its menu says "Restore" instead of
+    "Archive", so the menu is opened with a read-only click and left for the caller's next navigation.
+    """
+    if (state := await _archive_state_visible(page)) is not None:
+        return state
+    menu = await _first_visible(page, CONVERSATION_MENU_SELECTORS)
+    if menu is None or not await safe_click(menu, approval=None):
+        return None
+    for _ in range(8):
+        await page.wait_for_timeout(250)
+        if (state := await _archive_state_visible(page)) is not None:
+            return state
     return None
 
 
@@ -192,7 +292,7 @@ async def _sent_reply_is_visible(page, reply: str, logged_in_user: str) -> bool:
         messages = await extract_conversation_messages(page, "conversation participant")
         if messages:
             latest = messages[-1]
-            if latest.author.strip().casefold() == logged_in_user.strip().casefold() and normalize_text(latest.content) == normalize_text(reply):
+            if latest.author.strip().casefold() == logged_in_user.strip().casefold() and comparable_text(latest.content) == comparable_text(reply):
                 return True
         await asyncio.sleep(1)
     return False
@@ -210,9 +310,13 @@ async def perform_message_action(
     reply_hash = hashlib.sha256(reply.encode()).hexdigest()[:12] if action == "reply" else None
     try:
         async with open_linkedin(headless=True, unattended=True, approval=approval, lock_timeout=LOCK_TIMEOUT_SECONDS) as (_, page):
-            await page.goto(conversation_url)
-            messages = await extract_conversation_messages(page, "conversation participant")
+            # Resolve the name first: its fallback navigates away, which would unload the conversation.
             logged_in_user = await get_logged_in_user_name(page)
+            if not await load_conversation(page, conversation_url):
+                result = ActionResult(None, CONVERSATION_NOT_LOADED_NOTE)
+                logger.info("Message action item=%s action=%s result=%s", conversation_url, action, result.error)
+                return result
+            messages = await extract_conversation_messages(page, "conversation participant")
             verdict, note = message_precheck(messages, logged_in_user, expected_latest, action, reply)
             latest_message = messages[-1].content if messages else None
             if verdict == "already_sent":
@@ -221,12 +325,14 @@ async def perform_message_action(
                 result = ActionResult(None, note, latest_message)
             elif action == "dismiss":
                 result = ActionResult("archived") if await archive_conversation(page) else ActionResult(None, "Couldn't archive the conversation. Check LinkedIn before trying again.")
-            elif not await send_reply(page, reply):
-                result = ActionResult(None, "LinkedIn's message box didn't match your reply; nothing was sent.")
-            elif await _sent_reply_is_visible(page, reply, logged_in_user):
-                result = ActionResult("sent")
             else:
-                result = ActionResult(None, "Couldn't confirm the message was sent. Check LinkedIn before trying again.")
+                sent = await send_reply(page, reply)
+                if sent is True or (sent is None and await _sent_reply_is_visible(page, reply, logged_in_user)):
+                    result = ActionResult("sent")
+                elif sent is None:
+                    result = ActionResult(None, "Couldn't confirm the message was sent. Check LinkedIn before trying again.")
+                else:
+                    result = ActionResult(None, "LinkedIn didn't accept the reply; nothing was sent. Check LinkedIn before trying again.")
             logger.info(
                 "Message action item=%s action=%s reply_sha256=%s result=%s",
                 conversation_url,

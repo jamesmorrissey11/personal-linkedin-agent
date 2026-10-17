@@ -27,6 +27,8 @@ def message(author: str, content: str) -> ConversationMessage:
         ([message("Grace", "Queued prompt")], "Unknown User", "Queued prompt", "reply", "Approved reply", ("proceed", None)),
         ([message("Grace", "New prompt")], "Unknown User", "Queued prompt", "reply", "Approved reply", ("stop", NEW_MESSAGE_NOTE)),
         ([message("James", "Approved reply  \r\n")], "James", "Older prompt", "reply", "Approved reply", ("already_sent", None)),
+        ([message("Grace", "Line one\nLine two\nThanks,\nGrace")], "James", "Line one\n \n Line two\n Thanks,\xa0\n Grace", "dismiss", "", ("proceed", None)),
+        ([message("James", "Hi Grace,\nThanks")], "James", "Older prompt", "reply", "Hi Grace,\n\nThanks", ("already_sent", None)),
     ],
 )
 def test_precheck_table(messages, logged_in_user, expected_latest, action, reply, expected):
