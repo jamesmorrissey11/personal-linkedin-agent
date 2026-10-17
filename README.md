@@ -197,12 +197,15 @@ full research behind this choice (framework comparison, benchmarks, licensing).
 You can run the LinkedIn agent by executing the `invitations_manager.py` script. The agent analyzes invitations and queues each proposed Accept or Ignore action for mandatory human review. This command never clicks either LinkedIn action.
 
 ```shell
-uv run python invitations_manager.py --num-to-process 10
+uv run python invitations_manager.py
 ```
+
+Every new invitation is queued, including ones the agent was undecided about or whose LLM call failed (labelled **Needs your judgment**). Invitations that already have a review are skipped without an LLM call, and scanning stops once it reaches already-known invitations.
 
 Available flags:
 
-* `--num-to-process` (default `10`): number of invitations to process before stopping.
+* `--num-to-process` (default `100`): safety cap on *new* invitations queued per run (known ones don't count). The run report says when the cap was hit.
+* `--cleanup-stale`: close pending reviews for invitations no longer on LinkedIn, only after a full, non-empty scan.
 * `--record-eval-cases`: append each processed invitation as a new case to `linkedin_invitation_cases.yaml`, for later use with `evals.py`.
 * `--headless`: run the browser without a visible window.
 * `--apply-inbox-decisions`: apply accept/ignore decisions a human already made in Agent Inbox.
@@ -217,30 +220,59 @@ Every proposed invitation action and reply-worthy message must be reviewed by a 
 1. Fetch the UI and install it (requires Node.js and yarn): `git submodule update --init && git -C agent-inbox apply ../patches/agent-inbox-fixes.patch && (cd agent-inbox && yarn install)`. The patch fixes nested `<p>` hydration errors, applies styling outside `react-markdown` instead of passing its removed `className` prop, and makes a scheme-less Deployment URL (e.g. `localhost:2024`) default to `http://` instead of throwing "Invalid URL". Skip the apply if already applied.
 2. Start the LangGraph server: `uv run langgraph dev --no-browser` (serves `http://localhost:2024`)
 3. Start the UI: `cd agent-inbox && yarn dev` and open <http://localhost:3000>. In **Settings**, enter your LangSmith API key, then **Add Inbox** with Deployment URL `http://localhost:2024` and Assistant/Graph ID `invitation_review`. Add a second inbox with Graph ID `message_review` for messages.
-4. Analyze invitations and queue every proposed Accept or Ignore action: `uv run python invitations_manager.py --num-to-process 10`
+4. Analyze invitations and queue every one for review: `uv run python invitations_manager.py`
 5. Resolve them in the inbox, then apply the decisions to LinkedIn: `uv run python invitations_manager.py --apply-inbox-decisions`
-6. Messages: `uv run python inbox_manager.py --num-messages 20 [--min-urgency 4]` queues every conversation with an actionable suggested reply at or above the urgency threshold. After reviewing them, `uv run python inbox_manager.py --apply-inbox-decisions` opens the approved conversations and prints the approved reply for you to paste. **Nothing is ever sent automatically.**
+6. Messages: `uv run python inbox_manager.py [--min-urgency 4]` queues every conversation where the other person spoke last. Urgency is a label (`Low urgency`, `Couldn't score`), not a filter, and an unscored conversation gets an empty, editable reply. After reviewing them, `uv run python inbox_manager.py --apply-inbox-decisions` opens the approved conversations and prints the approved reply for you to paste. **Nothing is ever sent automatically.**
 
 Newsletter invitations are left pending because the current scraper cannot reliably identify both actions for those non-profile cards. They are never ignored automatically.
 
 Environment variables (read from the environment or `.env`, never logged): `LANGGRAPH_URL` (default `http://localhost:2024`) and `LANGSMITH_API_KEY` (falls back to `LANGSMITH_PERSONAL_ACCESS_TOKEN`; a local `langgraph dev` server doesn't check it).
 
-## Running the inbox manager
+## No message is sent or deleted without human approval
 
-`inbox_manager.py` is a separate script that scans your recent LinkedIn conversations, uses an LLM to score each thread's reply urgency (1-10), queues actionable reply proposals for mandatory review, and opens the highest-priority conversation. Opening a conversation is read-only; the script never sends a message.
+This project never sends, deletes, archives, reports, blocks, or leaves a LinkedIn conversation. `linkedin_guard.py` enforces that in layers so a code change, selector drift, prompt injection, or an unattended run cannot do it either:
+
+1. **Network kill switch:** every Playwright context aborts and logs any non-GET request to a LinkedIn messaging endpoint.
+2. **Guarded UI:** managers click through `safe_click`, which refuses send/delete/archive/report/block/leave/spam/recall controls, and message composers cancel all typing and Enter.
+3. **No LLM actuators:** the agents have no tools; message text is passed as quoted untrusted data.
+4. **CI architecture tests** (`tests/unit/test_no_message_writes.py`) fail on composer/send selectors, `press`/`type`/`fill`, or clicks that bypass `safe_click`.
+5. **Unattended runs** hit the same guards; blocked attempts are logged and added to the daily summary notification.
+
+If sending is ever added, approval must be per message, bound to the conversation URL and the SHA-256 of the exact final text shown to the human, single use, short-lived, and valid only in an interactive session. Any mismatch fails closed.
+
+## Daily unattended workflow
+
+`daily_run.py` runs everything in order so Agent Inbox shows only new, still-unhandled items: (1) apply decisions you made in the inbox, (2) close confirmed-stale items, (3) propose new items, (4) post a summary notification. The rule is **fail open**: when unsure, an item is queued rather than hidden.
 
 ```shell
-uv run python inbox_manager.py --num-messages 20
+uv run python daily_run.py --mode full --headless   # apply, cleanup, propose, summary
+uv run python daily_run.py --mode apply --headless  # apply and cleanup only; no LLM calls
+```
+
+* Exit codes: `0` success, `1` health failure (e.g. a scrape returned zero items, so nothing is closed), `2` LinkedIn login needed (a macOS notification is posted instead of waiting). Logs go to `logs/daily_run.log`.
+* Run reports show new / already queued / applied / superseded counts separately.
+* Stale items are closed as `superseded` (never deleted): an invitation gone from a full, non-empty list, a conversation whose latest message is exactly yours, or a conversation with a newer incoming message. Ambiguous cases are kept.
+* Scheduled runs never open conversations: message "apply" only finalizes dismissals. Approved replies stay until you run `inbox_manager.py --apply-inbox-decisions`.
+* Schedule it with launchd (daily 06:30 full run, apply/cleanup every 2 hours 07:00-21:00, and a keep-alive `langgraph dev` server): see [`scheduling/README.md`](scheduling/README.md).
+
+## Running the inbox manager
+
+`inbox_manager.py` is a separate script that scans your LinkedIn conversations until it reaches ones already handled, uses an LLM to score each new thread's reply urgency (1-10), queues every conversation where someone else spoke last for mandatory review, and opens the highest-priority conversation (interactive runs only). Opening a conversation is read-only; the script never sends a message.
+
+```shell
+uv run python inbox_manager.py
 ```
 
 Available flags:
 
-* `--num-messages` (default `20`): number of recent conversations to analyze.
-* `--min-urgency` (default `4`): minimum urgency score (1-10) for an actionable reply proposal to be queued in Agent Inbox.
+* `--num-messages` (default `100`): safety cap on conversations scanned per run.
+* `--min-urgency` (default `4`): conversations scoring below this get a `Low urgency` label; they are still queued.
+* `--headless`: run the browser without a visible window.
+* `--cleanup-only`: no LLM; finalize dismissed reviews and close pending ones whose latest message is yours.
 * `--apply-inbox-decisions`: skip ranking; open conversations approved in Agent Inbox and print the approved reply. Nothing is sent.
 * `--model-backend` (`ollama` | `openai` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring OpenAI models](#configuring-openai-models) and [Configuring Ollama Models](#configuring-ollama-models).
 
-It reuses the same `playwright/.auth/state.json` login session as the invitation manager. Unlike `invitations_manager.py`, it does not currently support `--headless`.
+It reuses the same `playwright/.auth/state.json` login session as the invitation manager.
 
 > **Note:** `inbox_manager.py` builds its Azure OpenAI client differently than `invitations_manager.py` (different base URL construction, model class, and credential type). See [Architecture](#architecture) for details.
 

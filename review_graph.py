@@ -35,7 +35,8 @@ class ReviewState(TypedDict, total=False):
     profile: str
     job_title: str
     reason: str
-    decision: Literal["accept", "ignore"]
+    label: str
+    decision: Literal["accept", "ignore", "superseded"]
 
 
 def build_interrupt(state: ReviewState) -> HumanInterrupt:
@@ -46,16 +47,19 @@ def build_interrupt(state: ReviewState) -> HumanInterrupt:
         ),
         # "Accept" accepts the invitation; "Ignore" ignores it.
         config=HumanInterruptConfig(allow_ignore=True, allow_respond=False, allow_edit=False, allow_accept=True),
-        description=f"The agent was undecided about this invitation.\n\n**Reason:** {state.get('reason', 'n/a')}\n\n[View profile]({state['profile']})",
+        description=f"**{state.get('label') or 'Agent proposal'}**\n\n**Reason:** {state.get('reason', 'n/a')}\n\n[View profile]({state['profile']})",
     )
 
 
-def decision_from_response(response: dict[str, Any]) -> Literal["accept", "ignore"]:
+def decision_from_response(response: dict[str, Any]) -> Literal["accept", "ignore", "superseded"]:
     response_type = response.get("type")
     if response_type == "accept":
         return "accept"
     if response_type == "ignore":
         return "ignore"
+    if response_type == "superseded":
+        # Sent by the scheduled job when LinkedIn shows the item was already handled; a terminal no-op.
+        return "superseded"
     raise ValueError(f"Unsupported Agent Inbox response type: {response_type!r}")
 
 
@@ -80,14 +84,16 @@ class MessageReviewState(TypedDict, total=False):
     sender_name: str
     conversation_url: str
     urgency_score: int
+    label: str
     latest_message: str
     reason: str
     suggested_reply: str
-    action: Literal["reply", "dismiss"]
+    action: Literal["reply", "dismiss", "superseded"]
     reply: str
 
 
 def build_message_interrupt(state: MessageReviewState) -> HumanInterrupt:
+    label_line = f"**{state['label']}**\n\n" if state.get("label") else ""
     return HumanInterrupt(
         action_request=ActionRequest(
             action=f"Reply to {state['sender_name']}?",
@@ -95,7 +101,7 @@ def build_message_interrupt(state: MessageReviewState) -> HumanInterrupt:
         ),
         # Accept uses the suggested reply, Edit lets you change it, Ignore dismisses the conversation.
         config=HumanInterruptConfig(allow_ignore=True, allow_respond=False, allow_edit=True, allow_accept=True),
-        description=(f"**Urgency:** {state.get('urgency_score', '?')}/10\n\n**Latest message:** {state.get('latest_message', '')}\n\n**Why:** {state.get('reason', 'n/a')}\n\n[Open conversation]({state['conversation_url']})"),
+        description=(f"{label_line}**Urgency:** {state.get('urgency_score', '?')}/10\n\n**Latest message:** {state.get('latest_message', '')}\n\n**Why:** {state.get('reason', 'n/a')}\n\n[Open conversation]({state['conversation_url']})"),
     )
 
 
@@ -108,6 +114,8 @@ def message_result_from_response(response: dict[str, Any], suggested_reply: str)
         return {"action": "reply", "reply": str((args.get("args") or {}).get("suggested_reply", suggested_reply))}
     if response_type == "ignore":
         return {"action": "dismiss"}
+    if response_type == "superseded":
+        return {"action": "superseded"}
     raise ValueError(f"Unsupported Agent Inbox response type: {response_type!r}")
 
 
