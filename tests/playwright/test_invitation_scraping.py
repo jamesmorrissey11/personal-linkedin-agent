@@ -33,9 +33,13 @@ def test_accept_and_ignore_buttons_are_scoped_to_card(page: Page):
     ignore_button = card.query_selector("button[aria-label*='Ignore']")
 
     assert accept_button is not None
-    assert "Jane Doe" in accept_button.get_attribute("aria-label")
+    accept_label = accept_button.get_attribute("aria-label")
+    assert accept_label is not None
+    assert "Jane Doe" in accept_label
     assert ignore_button is not None
-    assert "Jane Doe" in ignore_button.get_attribute("aria-label")
+    ignore_label = ignore_button.get_attribute("aria-label")
+    assert ignore_label is not None
+    assert "Jane Doe" in ignore_label
 
 
 def test_newsletter_ignore_button_is_found_by_selector(page: Page):

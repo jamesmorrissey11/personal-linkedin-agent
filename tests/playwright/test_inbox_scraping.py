@@ -24,7 +24,11 @@ def test_participant_name_is_scoped_to_conversation(page: Page):
     page.goto(fixture_url("inbox_thread_list.html"))
 
     conversations = page.query_selector_all("li.msg-conversation-listitem")
-    names = [c.query_selector("h3.msg-conversation-card__participant-names").inner_text() for c in conversations]
+    names = []
+    for conversation in conversations:
+        participant = conversation.query_selector("h3.msg-conversation-card__participant-names")
+        assert participant is not None
+        names.append(participant.inner_text())
 
     assert names == ["Alex Recruiter", "Sam Colleague"]
 
@@ -37,9 +41,16 @@ def test_message_events_expose_author_content_and_timestamp(page: Page):
     assert len(message_elements) == 2
 
     first = message_elements[0]
-    author = first.query_selector(".msg-s-message-group__name").inner_text()
-    content = first.query_selector("p.msg-s-event-listitem__body").inner_text()
-    timestamp = first.query_selector("time.msg-s-message-group__timestamp").inner_text()
+    author_element = first.query_selector(".msg-s-message-group__name")
+    content_element = first.query_selector("p.msg-s-event-listitem__body")
+    timestamp_element = first.query_selector("time.msg-s-message-group__timestamp")
+    assert author_element is not None
+    assert content_element is not None
+    assert timestamp_element is not None
+
+    author = author_element.inner_text()
+    content = content_element.inner_text()
+    timestamp = timestamp_element.inner_text()
 
     assert author == "Sam Colleague"
     assert content == "Hey, can you take a look at the PR when you get a chance?"
