@@ -1,0 +1,20 @@
+{
+    "version": 1,
+    "hooks": {
+        "postToolUse": [
+            {
+                "type": "command",
+                "matcher": "edit|create|apply_patch",
+                "bash": ".github/hooks/scripts/test-router.sh",
+                "timeoutSec": 180
+            }
+        ],
+        "agentStop": [
+            {
+                "type": "command",
+                "bash": ".github/hooks/scripts/test-router.sh",
+                "timeoutSec": 300
+            }
+        ]
+    }
+}
