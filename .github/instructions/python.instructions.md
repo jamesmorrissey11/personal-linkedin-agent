@@ -3,7 +3,7 @@ applyTo: "*.py"
 description: Conventions, client-setup pitfalls, lint/format, and test invocation for the Python CLI scripts (invitations_manager.py, inbox_manager.py, evals.py)
 ---
 
-- **Safety invariant: no LinkedIn message is ever sent, deleted, archived, reported, blocked, or left without explicit human approval.** Do not add message-write capability. Route every click through `linkedin_guard.safe_click`, install `install_linkedin_write_guard` on every Playwright context, never type or press keys in a composer, and give LLM agents no tools. If sending is ever added it needs per-message approval bound to the conversation URL and the SHA-256 of the exact final text, single use, expiring, and interactive-only; any mismatch fails closed. `tests/unit/test_no_message_writes.py` enforces this in CI.
+- **Safety invariant: nothing is accepted, ignored, sent, or archived on LinkedIn unless the human chose it for that one item in Agent Inbox; the LLM only suggests.** Sync/scrape contexts stay fully read-only. Only `linkedin_actions.py`, called by `review_graph.py` after an interrupt resumes, may fill a composer or use send/archive selectors. Every context and `safe_click` in that module must carry the matching single-use `ApprovedAction`; exact reply text is verified before sending. Deleting, reporting, blocking, leaving, spam, recall, and any LLM-initiated or bulk action remain forbidden. `tests/unit/test_no_message_writes.py` enforces the architecture.
 - Critical inconsistency — do not copy `inbox_manager.py`'s Azure OpenAI client setup:
   `invitations_manager.py` uses `base_url=AZURE_OPENAI_ENDPOINT + "/openai/v1"` and async
   `azure.identity.aio.AzureDeveloperCliCredential`; `inbox_manager.py` uses
@@ -12,9 +12,9 @@ description: Conventions, client-setup pitfalls, lint/format, and test invocatio
   use the current `OpenAIChatModel`. When adding a third script or touching agent setup, replicate
   `invitations_manager.py`'s pattern (the known-working one); flag/ask before "fixing" `inbox_manager.py` —
   this divergence is documented, intentional-until-decided tech debt, not an oversight to silently correct.
-- No shared module: logging setup, the Playwright login/session-cache flow, and CLI arg parsing are each
-  implemented independently in `invitations_manager.py` and `inbox_manager.py`. Don't assume a helper in
-  one file is reusable — check both files if making a similar change to both.
+- Shared browser primitives live in `linkedin_pages.py` (read-only page helpers, login/session cache, and
+  the cross-process lock); human-approved mutations live in `linkedin_actions.py`. Logging setup and CLI
+  parsing remain independent in `invitations_manager.py` and `inbox_manager.py`.
 - Prompts are inline strings, not templates: LLM system prompts (invitation accept/ignore rules, message
   urgency rules) live directly in Python code in each script; there is no Jinja/templating layer.
 - Business rules are LLM-judgment only: rules like "always ignore wealth/financial advisors" or "ignore

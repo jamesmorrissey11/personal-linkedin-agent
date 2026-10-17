@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Remove the launchd agents installed by install.sh.
+# Remove current launchd agents and the retired apply-run agent if it is still installed.
 set -euo pipefail
 
 DEST="$HOME/Library/LaunchAgents"

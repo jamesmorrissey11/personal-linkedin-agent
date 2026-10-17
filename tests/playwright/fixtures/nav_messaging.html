@@ -1,0 +1,43 @@
+<!doctype html>
+<!--
+  Classic LinkedIn messaging chrome: the global nav exposes the logged-in user's avatar, while the
+  conversation list contains OTHER people's profile links. Guards against resolving a participant's
+  name as the logged-in user.
+-->
+<html>
+  <head>
+    <title>(5) Messaging | LinkedIn</title>
+  </head>
+  <body>
+    <nav class="global-nav__nav">
+      <ul>
+        <li class="global-nav__primary-item">
+          <a href="/feed/"><span>Home</span></a>
+        </li>
+        <li class="global-nav__primary-item">
+          <button class="global-nav__primary-link-me-menu-trigger" aria-expanded="false">
+            <img alt="James Morrissey" src="me.png" />
+            <span>Me</span>
+          </button>
+        </li>
+      </ul>
+    </nav>
+
+    <main>
+      <ul>
+        <li class="msg-conversation-listitem">
+          <a href="https://www.linkedin.com/in/yogesh-kumar/">
+            <img alt="Yogesh Kumar Profile" src="yogesh.png" />
+          </a>
+          <h3 class="msg-conversation-card__participant-names">Yogesh Kumar</h3>
+        </li>
+        <li class="msg-conversation-listitem">
+          <a href="https://www.linkedin.com/in/samantha-stern/">
+            <img alt="Samantha Stern Profile" src="samantha.png" />
+          </a>
+          <h3 class="msg-conversation-card__participant-names">Samantha Stern</h3>
+        </li>
+      </ul>
+    </main>
+  </body>
+</html>

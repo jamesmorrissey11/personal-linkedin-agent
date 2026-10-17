@@ -208,52 +208,49 @@ Available flags:
 * `--cleanup-stale`: close pending reviews for invitations no longer on LinkedIn, only after a full, non-empty scan.
 * `--record-eval-cases`: append each processed invitation as a new case to `linkedin_invitation_cases.yaml`, for later use with `evals.py`.
 * `--headless`: run the browser without a visible window.
-* `--apply-inbox-decisions`: apply accept/ignore decisions a human already made in Agent Inbox.
 * `--model-backend` (`ollama` | `openai` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring OpenAI models](#configuring-openai-models) and [Configuring Ollama Models](#configuring-ollama-models).
 
 On first run (or whenever the saved session expires), a browser window opens to `linkedin.com/login` and waits for you to log in manually; the resulting session is cached to `playwright/.auth/state.json` so future runs skip the login step.
 
 ## Human review with Agent Inbox
 
-Every proposed invitation action and reply-worthy message must be reviewed by a human in [Agent Inbox](https://github.com/langchain-ai/agent-inbox), included as a git submodule in `agent-inbox/`. `review_graph.py` defines two LangGraph graphs that pause with an `interrupt`: `invitation_review` (**Accept** / **Ignore**) and `message_review` (**Accept** the suggested reply, **Edit** it, or **Ignore**). Queue failures stop the proposal workflow rather than falling back to a LinkedIn action.
+Every proposed invitation action and reply-worthy message must be reviewed by a human in [Agent Inbox](https://github.com/langchain-ai/agent-inbox), included as a git submodule in `agent-inbox/`. `review_graph.py` defines two LangGraph graphs that pause with an `interrupt`: `invitation_review` (**Accept** / **Ignore**) and `message_review` (**Accept** the suggested reply, **Edit** it, or **Ignore**). Your decision is the action: the graph immediately accepts or ignores the invitation, sends the exact submitted reply, or archives the ignored conversation. A failed or stale action returns to Agent Inbox with a visible note instead of silently closing.
 
 1. Fetch the UI and install it (requires Node.js and yarn): `git submodule update --init && git -C agent-inbox apply ../patches/agent-inbox-fixes.patch && (cd agent-inbox && yarn install)`. The patch fixes nested `<p>` hydration errors, applies styling outside `react-markdown` instead of passing its removed `className` prop, and makes a scheme-less Deployment URL (e.g. `localhost:2024`) default to `http://` instead of throwing "Invalid URL". Skip the apply if already applied.
-2. Start the LangGraph server: `uv run langgraph dev --no-browser` (serves `http://localhost:2024`)
+2. Start the LangGraph server: `uv run langgraph dev --no-browser --no-reload` (serves `http://localhost:2024`; disabling reload prevents an edit from interrupting an action)
 3. Start the UI: `cd agent-inbox && yarn dev` and open <http://localhost:3000>. In **Settings**, enter your LangSmith API key, then **Add Inbox** with Deployment URL `http://localhost:2024` and Assistant/Graph ID `invitation_review`. Add a second inbox with Graph ID `message_review` for messages.
 4. Analyze invitations and queue every one for review: `uv run python invitations_manager.py`
-5. Resolve them in the inbox, then apply the decisions to LinkedIn: `uv run python invitations_manager.py --apply-inbox-decisions`
-6. Messages: `uv run python inbox_manager.py [--min-urgency 4]` queues every conversation where the other person spoke last. Urgency is a label (`Low urgency`, `Couldn't score`), not a filter, and an unscored conversation gets an empty, editable reply. After reviewing them, `uv run python inbox_manager.py --apply-inbox-decisions` opens the approved conversations and prints the approved reply for you to paste. **Nothing is ever sent automatically.**
+5. Resolve an invitation in Agent Inbox. **Accept** or **Ignore** acts on LinkedIn immediately and closes the item only after the action succeeds.
+6. Messages: `uv run python inbox_manager.py [--min-urgency 4]` queues every conversation where the other person spoke last. Urgency is a label (`Low urgency`, `Couldn't score`), not a filter. **Accept** sends the suggested reply, **Edit** sends the exact edited text, and **Ignore** archives the conversation. Accept is hidden when there is no non-empty suggestion.
 
 Newsletter invitations are left pending because the current scraper cannot reliably identify both actions for those non-profile cards. They are never ignored automatically.
 
 Environment variables (read from the environment or `.env`, never logged): `LANGGRAPH_URL` (default `http://localhost:2024`) and `LANGSMITH_API_KEY` (falls back to `LANGSMITH_PERSONAL_ACCESS_TOKEN`; a local `langgraph dev` server doesn't check it).
 
-## No message is sent or deleted without human approval
+## No LinkedIn action happens without human approval
 
-This project never sends, deletes, archives, reports, blocks, or leaves a LinkedIn conversation. `linkedin_guard.py` enforces that in layers so a code change, selector drift, prompt injection, or an unattended run cannot do it either:
+**Nothing is accepted, ignored, sent, or archived on LinkedIn unless you chose it for that one item in Agent Inbox. The LLM only suggests.** Deleting, reporting, blocking, leaving, recalling, or bulk-approving remains unsupported. `linkedin_guard.py` enforces this in layers:
 
-1. **Network kill switch:** every Playwright context aborts and logs any non-GET request to a LinkedIn messaging endpoint.
-2. **Guarded UI:** managers click through `safe_click`, which refuses send/delete/archive/report/block/leave/spam/recall controls, and message composers cancel all typing and Enter.
-3. **No LLM actuators:** the agents have no tools; message text is passed as quoted untrusted data.
-4. **CI architecture tests** (`tests/unit/test_no_message_writes.py`) fail on composer/send selectors, `press`/`type`/`fill`, or clicks that bypass `safe_click`.
-5. **Unattended runs** hit the same guards; blocked attempts are logged and added to the daily summary notification.
-
-If sending is ever added, approval must be per message, bound to the conversation URL and the SHA-256 of the exact final text shown to the human, single use, short-lived, and valid only in an interactive session. Any mismatch fails closed.
+1. **Sync contexts are read-only:** the managers and daily job use the default-deny network and composer guards, including blocked read receipts and presence writes.
+2. **Action contexts are single-use:** `linkedin_actions.py` opens one guarded context with an `ApprovedAction` for only the chosen send, archive, accept, or ignore operation.
+3. **Exact-text sends:** the action fills the exact submitted reply, verifies the composer contents, allows one send request, and confirms the sent text before closing.
+4. **Stale-state checks:** a new incoming message or a reply already made on LinkedIn stops the action and returns the item for a fresh decision. A repeated action never blindly replays.
+5. **No LLM actuators:** the agents expose no tools; only `review_graph.py` calls the action functions after an Agent Inbox interrupt resumes.
+6. **CI architecture tests:** `tests/unit/test_no_message_writes.py` limits composer/write selectors to the action module and verifies every action context and guarded click carries an approval.
 
 ## Daily unattended workflow
 
-`daily_run.py` runs everything in order so Agent Inbox shows only new, still-unhandled items: (1) apply decisions you made in the inbox, (2) close confirmed-stale items, (3) propose new items, (4) post a summary notification. The rule is **fail open**: when unsure, an item is queued rather than hidden.
+`daily_run.py` is sync-only. It runs in this order: (1) recover interrupted review actions and retire legacy pre-live-action decisions, (2) close invitations and conversations already handled directly on LinkedIn, (3) propose new invitations and messages, and (4) post a summary notification. It never accepts, ignores, sends, or archives anything. The rule is **fail open**: when unsure, an item stays queued rather than being hidden.
 
 ```shell
-uv run python daily_run.py --mode full --headless   # apply, cleanup, propose, summary
-uv run python daily_run.py --mode apply --headless  # apply and cleanup only; no LLM calls
+uv run python daily_run.py --headless
 ```
 
 * Exit codes: `0` success, `1` health failure (e.g. a scrape returned zero items, so nothing is closed), `2` LinkedIn login needed (a macOS notification is posted instead of waiting). Logs go to `logs/daily_run.log`.
-* Run reports show new / already queued / applied / superseded counts separately.
-* Stale items are closed as `superseded` (never deleted): an invitation gone from a full, non-empty list, a conversation whose latest message is exactly yours, or a conversation with a newer incoming message. Ambiguous cases are kept.
-* Scheduled runs never open conversations: message "apply" only finalizes dismissals. Approved replies stay until you run `inbox_manager.py --apply-inbox-decisions`.
-* Schedule it with launchd (daily 06:30 full run, apply/cleanup every 2 hours 07:00-21:00, and a keep-alive `langgraph dev` server): see [`scheduling/README.md`](scheduling/README.md).
+* Run reports show new / already queued / superseded counts, recovered interrupted actions, and retired legacy decisions.
+* Stale items are closed as `superseded` (never deleted): an invitation gone from a full, non-empty list, a conversation whose latest message is exactly yours, a conversation archived on LinkedIn, or a conversation replaced by a newer incoming message. Ambiguous cases are kept.
+* A new incoming message after a reply or archive is queued again because deduplication only considers currently pending reviews.
+* Schedule it with launchd (daily 06:30 sync run and a keep-alive `langgraph dev --no-reload` server): see [`scheduling/README.md`](scheduling/README.md).
 
 ## Running the inbox manager
 
@@ -268,8 +265,7 @@ Available flags:
 * `--num-messages` (default `100`): safety cap on conversations scanned per run.
 * `--min-urgency` (default `4`): conversations scoring below this get a `Low urgency` label; they are still queued.
 * `--headless`: run the browser without a visible window.
-* `--cleanup-only`: no LLM; finalize dismissed reviews and close pending ones whose latest message is yours.
-* `--apply-inbox-decisions`: skip ranking; open conversations approved in Agent Inbox and print the approved reply. Nothing is sent.
+* `--cleanup-only`: no LLM; close pending reviews for conversations you replied to or archived directly on LinkedIn.
 * `--model-backend` (`ollama` | `openai` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring OpenAI models](#configuring-openai-models) and [Configuring Ollama Models](#configuring-ollama-models).
 
 It reuses the same `playwright/.auth/state.json` login session as the invitation manager.

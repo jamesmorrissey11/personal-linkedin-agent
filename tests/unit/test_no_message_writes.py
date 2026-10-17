@@ -1,4 +1,4 @@
-"""Architecture tests: no code path may send, type into a composer, delete, archive, report, block, or leave a LinkedIn conversation."""
+"""Architecture tests: LinkedIn writes exist only in guarded, human-approved action paths."""
 
 import ast
 import re
@@ -8,12 +8,11 @@ import tests.playwright.helpers  # noqa: F401  (placeholder Azure env vars so th
 from tests.async_helpers import run_async_test
 
 ROOT = Path(__file__).resolve().parents[2]
-# linkedin_guard.py is the one place allowed to call .click(): safe_click wraps it.
 CLICK_ALLOWED_FILES = {"linkedin_guard.py"}
+ACTION_FILES = {"linkedin_actions.py"}
 FORBIDDEN_CALLS = {"press", "type", "fill", "insert_text", "dispatch_event", "set_input_files", "press_sequentially"}
 FORBIDDEN_SELECTOR_PATTERN = re.compile(r"msg-form|send-button|contenteditable|aria-label\*?=['\"]?(send|delete|archive|report|block|leave)", re.IGNORECASE)
-# Explicit exceptions for source files that legitimately mention these strings (none today).
-SELECTOR_ALLOWED_FILES = {"linkedin_guard.py"}
+SELECTOR_ALLOWED_FILES = {"linkedin_guard.py"} | ACTION_FILES
 
 
 def source_files() -> list[Path]:
@@ -30,13 +29,21 @@ def attribute_calls(tree: ast.Module):
             yield node.func.attr, node.lineno
 
 
+def call_name(node: ast.Call) -> str | None:
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return None
+
+
 def test_sources_are_found():
     names = {path.name for path in source_files()}
-    assert {"inbox_manager.py", "invitations_manager.py", "linkedin_guard.py"} <= names
+    assert {"inbox_manager.py", "invitations_manager.py", "linkedin_actions.py", "linkedin_guard.py", "review_graph.py"} <= names
 
 
 def test_no_keyboard_typing_or_filling_in_python_sources():
-    offenders = [f"{path.name}:{line} .{attr}()" for path in source_files() if path.name not in CLICK_ALLOWED_FILES for attr, line in attribute_calls(parse(path)) if attr in FORBIDDEN_CALLS]
+    offenders = [f"{path.name}:{line} .{attr}()" for path in source_files() if path.name not in ACTION_FILES for attr, line in attribute_calls(parse(path)) if attr in FORBIDDEN_CALLS]
     assert offenders == []
 
 
@@ -53,6 +60,28 @@ def test_no_send_or_composer_selectors_in_sources():
         for node in ast.walk(parse(path)):
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and FORBIDDEN_SELECTOR_PATTERN.search(node.value):
                 offenders.append(f"{path.name}:{node.lineno}: {node.value[:60]!r}")
+    assert offenders == []
+
+
+def test_actions_always_pass_an_approval():
+    offenders = []
+    for node in ast.walk(parse(ROOT / "linkedin_actions.py")):
+        if not isinstance(node, ast.Call) or call_name(node) not in {"open_linkedin", "safe_click"}:
+            continue
+        if not any(keyword.arg == "approval" for keyword in node.keywords):
+            offenders.append(f"linkedin_actions.py:{node.lineno} {call_name(node)}()")
+    assert offenders == []
+
+
+def test_only_review_graph_calls_actions():
+    action_names = {"perform_invitation_action", "perform_message_action"}
+    offenders = []
+    for path in source_files():
+        if path.name in ACTION_FILES | {"review_graph.py"}:
+            continue
+        for node in ast.walk(parse(path)):
+            if isinstance(node, ast.Call) and call_name(node) in action_names:
+                offenders.append(f"{path.name}:{node.lineno} {call_name(node)}()")
     assert offenders == []
 
 

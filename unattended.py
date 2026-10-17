@@ -1,5 +1,6 @@
 """Shared helpers for unattended (scheduled) runs: errors, report counts, and macOS notifications."""
 
+import asyncio
 import logging
 import subprocess
 import sys
@@ -59,4 +60,18 @@ def notify(title: str, message: str) -> None:
     try:
         subprocess.run(command, check=False, timeout=10, capture_output=True)
     except (OSError, subprocess.SubprocessError) as error:
+        logger.warning("Could not post notification: %s", error)
+
+
+async def notify_async(title: str, message: str) -> None:
+    """Post a notification from async code without blocking the event loop.
+
+    notify() shells out to osascript. Called directly from a graph node that would be a blocking
+    subprocess call on the event loop, which `langgraph dev`'s blockbuster turns into an error that
+    aborts the run. Notifications are also best-effort: a failure here must never fail an action that
+    already took effect on LinkedIn.
+    """
+    try:
+        await asyncio.to_thread(notify, title, message)
+    except Exception as error:
         logger.warning("Could not post notification: %s", error)

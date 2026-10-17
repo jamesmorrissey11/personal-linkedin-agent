@@ -2,20 +2,15 @@ import argparse
 import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
-from enum import Enum
 from pathlib import Path
-from typing import Literal
-from urllib.parse import unquote, urlparse, urlunparse
 
 import azure.identity.aio
 import yaml
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from playwright.async_api import ElementHandle, Page, async_playwright
 from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-from pydantic import BaseModel
 from pydantic_ai import Agent, NativeOutput
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.ollama import OllamaModel
@@ -25,10 +20,22 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from rich.logging import RichHandler
 
-from linkedin_guard import ApprovedAction, blocked_write_summary, install_linkedin_write_guard, safe_click
+from linkedin_pages import (  # noqa: F401  (unused names are re-exported for existing callers)
+    INVITATION_CARD_SELECTORS,
+    MAX_SCANNED_INVITATIONS,
+    NO_PENDING_INVITATIONS_TEXT,
+    Invitation,
+    InvitationAction,
+    InvitationDecision,
+    collect_invitation_profiles,
+    get_invitation_cards,
+    get_invitation_info,
+    open_linkedin,
+    page_reports_no_invitations,
+)
 from review_graph import GRAPH_ID
-from review_queue import classify_review, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_review, get_review_client, mark_applied, supersede_review
-from unattended import KNOWN_STREAK_STOP, HealthCheckError, LoginRequiredError, ReviewCounts
+from review_queue import classify_review, enqueue_review, fetch_pending_reviews, find_pending_review, get_review_client, supersede_review
+from unattended import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts
 
 # Setup logging with rich
 logging.basicConfig(level=logging.WARNING, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(show_level=True)])
@@ -38,12 +45,6 @@ logger.setLevel(logging.INFO)
 PROFILE_NAVIGATION_TIMEOUT_MS = 45000
 PROFILE_CONTENT_TIMEOUT_MS = 15000
 NEWSLETTER_IGNORE_SELECTOR = "button[aria-label^='Ignore invitation for ']"
-MAX_SCANNED_INVITATIONS = int(os.environ.get("MAX_SCANNED_INVITATIONS", "500"))
-NO_PENDING_INVITATIONS_TEXT = "no pending invitations"
-INVITATION_CARD_SELECTORS = [
-    "div[role='listitem']:has(button[aria-label^='Ignore an invitation to connect from ']):has(a[href*='/in/'])",
-    "main div[componentkey^='auto-component-']:has(button[aria-label*='Accept'])",
-]
 
 load_dotenv()
 
@@ -114,31 +115,6 @@ def build_model(backend: str):
         raise ValueError(f"Unknown model backend: {backend!r}. Expected 'ollama', 'openai', 'azure', or 'fallback'.")
     logger.info("Using model backend=%s (model_name=%s)", backend, chosen_model.model_name)
     return chosen_model
-
-
-class InvitationAction(Enum):
-    ACCEPT = "accept"
-    IGNORE = "ignore"
-    UNDECIDED = "undecided"
-
-
-class InvitationDecision(BaseModel):
-    action: InvitationAction
-    reason: str
-
-
-class ApprovedInvitationAction(BaseModel):
-    action: Literal[InvitationAction.ACCEPT, InvitationAction.IGNORE]
-    reason: str
-    thread_id: str
-
-
-class Invitation(BaseModel):
-    name: str
-    profile: str
-    job_title: str
-    mutual_connections: bool
-    decision: InvitationDecision | None = None
 
 
 INVITATION_DECISION_SYSTEM_PROMPT = """Decide whether to accept or ignore LinkedIn invitations based on the profile information provided.
@@ -215,85 +191,6 @@ async def get_decision(case_name: str, input_message: str, record_eval_cases: bo
     return (await try_decision(case_name, input_message, record_eval_cases))[0]
 
 
-async def get_invitation_info(card) -> Invitation | None:
-    def first_non_empty_line(text: str) -> str:
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped:
-                return stripped
-        return text.strip()
-
-    # Fetch the primary profile link (most cards link to /in/ profiles)
-    profile_link_element = await card.query_selector("a[href*='/in/']")
-    if not profile_link_element:
-        profile_link_element = await card.query_selector("a")
-    if not profile_link_element:
-        return None
-
-    profile_link = await profile_link_element.get_attribute("href")
-    if not profile_link:
-        return None
-    if not profile_link.startswith("http"):
-        profile_link = f"https://www.linkedin.com{profile_link}"
-    # Normalize URL: decode any percent-encoded characters to get clean URL
-    parsed = urlparse(profile_link)
-    decoded_path = unquote(parsed.path)
-    profile_link = urlunparse(parsed._replace(path=decoded_path))
-
-    # Resolve the invitee name from a list of possible selectors (new follower layout lacks <strong>)
-    name_selectors = [
-        "a > strong",
-        "a span[aria-hidden='true']",
-        "span[aria-hidden='true']",
-        "span[dir='auto']",
-    ]
-    name = ""
-    for selector in name_selectors:
-        element = await card.query_selector(selector)
-        if element:
-            text = (await element.inner_text()).strip()
-            if text:
-                name = first_non_empty_line(text)
-                break
-    if not name:
-        link_text = (await profile_link_element.inner_text()).strip()
-        if link_text:
-            name = first_non_empty_line(link_text)
-    if not name:
-        return None
-
-    card_lines = [line.strip() for line in (await card.inner_text()).splitlines() if line.strip()]
-    try:
-        name_index = card_lines.index(name)
-    except ValueError:
-        name_index = -1
-
-    job_title = "Unknown"
-    for line in card_lines[name_index + 1 :]:
-        if line in {"Accept", "Ignore"} or line.startswith("Reply to ") or "mutual connection" in line.lower():
-            continue
-        if line:
-            job_title = line
-            break
-
-    if job_title == "Unknown":
-        for selector in ["p:nth-of-type(2)", "span.t-14", "div.artdeco-entity-lockup__subtitle span"]:
-            element = await card.query_selector(selector)
-            if not element:
-                continue
-            text = (await element.inner_text()).strip()
-            if text:
-                job_title = first_non_empty_line(text)
-                break
-
-    # Check for mutual connections (single phrase)
-    connection_info_element = await card.query_selector("*:has-text('mutual connection')")
-    connection_info = (await connection_info_element.inner_text()).strip() if connection_info_element else ""
-    has_mutual_connections = "mutual connection" in connection_info.lower()
-
-    return Invitation(name=name, profile=profile_link, job_title=job_title, mutual_connections=has_mutual_connections)
-
-
 async def get_profile_info(page: Page, profile_url: str) -> str:
     """Visit the profile page and extract relevant information."""
     new_page = await page.context.new_page()
@@ -327,41 +224,6 @@ async def get_profile_info(page: Page, profile_url: str) -> str:
         await new_page.close()
 
 
-def approved_invitation_decision(resolved_review: dict) -> ApprovedInvitationAction | None:
-    """Return a validated human decision, or fail closed for malformed review data."""
-    values = resolved_review.get("values") or {}
-    thread_id = resolved_review.get("thread_id")
-    if not isinstance(thread_id, str) or not thread_id:
-        logger.warning("Skipping invitation review without a thread ID: %r", resolved_review)
-        return None
-    try:
-        action = InvitationAction(values["decision"])
-    except (KeyError, ValueError, TypeError):
-        logger.warning("Skipping malformed invitation review: %r", values)
-        return None
-    if action not in {InvitationAction.ACCEPT, InvitationAction.IGNORE}:
-        logger.warning("Skipping non-actionable invitation review: %r", values)
-        return None
-    return ApprovedInvitationAction(action=action, reason="Approved by human via Agent Inbox", thread_id=thread_id)
-
-
-async def execute_approved_action(card: ElementHandle, decision: ApprovedInvitationAction) -> bool:
-    """Execute a validated human-approved invitation action."""
-    if decision.action == InvitationAction.ACCEPT:
-        accept_button = await card.query_selector("button[aria-label*='Accept']")
-        if accept_button:
-            return await safe_click(accept_button, approval=ApprovedAction("invitation", "accept"))
-        else:
-            logger.warning("Accept button not found on the card.")
-    elif decision.action == InvitationAction.IGNORE:
-        ignore_button = await card.query_selector("button[aria-label*='Ignore']")
-        if ignore_button:
-            return await safe_click(ignore_button, approval=ApprovedAction("invitation", "ignore"))
-        else:
-            logger.warning("Ignore button not found on the card.")
-    return False
-
-
 NEEDS_JUDGMENT_LABEL = "Needs your judgment"
 
 
@@ -379,74 +241,9 @@ async def queue_invitation_proposal(review_client, invitation: Invitation, decis
     return await enqueue_review(review_client, GRAPH_ID, invitation.profile, input_data)
 
 
-@asynccontextmanager
-async def linkedin_session(headless: bool, unattended: bool):
-    """Yield (context, page) for a logged-in LinkedIn session.
-
-    When unattended (or headless) an expired session raises LoginRequiredError instead of waiting for a human.
-    """
-    os.makedirs("playwright/.auth", exist_ok=True)
-    if not os.path.exists("playwright/.auth/state.json"):
-        with open("playwright/.auth/state.json", "w") as f:
-            f.write("{}")
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=headless)
-        try:
-            context = await browser.new_context(storage_state="playwright/.auth/state.json")
-            await install_linkedin_write_guard(context)
-            page = await context.new_page()
-            await page.goto("https://www.linkedin.com/feed")
-            if not page.url.startswith("https://www.linkedin.com/feed"):
-                if headless or unattended:
-                    raise LoginRequiredError("LinkedIn session expired; log in again with a visible browser.")
-                logger.info("User is not logged in. Please log in manually...")
-                await page.goto("https://www.linkedin.com/login")
-                await page.wait_for_url("https://www.linkedin.com/feed/**", timeout=120000)
-                logger.info("Login detected. Saving storage state...")
-                await context.storage_state(path="playwright/.auth/state.json")
-            yield context, page
-        finally:
-            if summary := blocked_write_summary():
-                logger.warning(summary)
-            await browser.close()
-
-
-async def get_invitation_cards(page: Page) -> list[ElementHandle]:
-    for selector in INVITATION_CARD_SELECTORS:
-        cards = await page.query_selector_all(selector)
-        if cards:
-            return cards
-    html_snippet = (await page.content())[:2000]
-    logger.warning("No invitation cards found. HTML snippet (2k chars): %s", html_snippet)
-    return []
-
-
-async def page_reports_no_invitations(page: Page) -> bool:
-    return NO_PENDING_INVITATIONS_TEXT in (await page.content()).lower()
-
-
-async def collect_invitation_profiles(page: Page) -> tuple[set[str], bool]:
-    """Scroll the whole invitation list. Returns (profiles, complete); complete is False if any card could not be parsed or a cap was hit."""
-    profiles: set[str] = set()
-    complete = True
-    consecutive_no_new_scrolls = 0
-    while consecutive_no_new_scrolls < 5:
-        found_new = False
-        for card in await get_invitation_cards(page):
-            invitation = await get_invitation_info(card)
-            if not invitation:
-                complete = False
-                continue
-            if invitation.profile not in profiles:
-                profiles.add(invitation.profile)
-                found_new = True
-        if len(profiles) >= MAX_SCANNED_INVITATIONS:
-            return profiles, False
-        consecutive_no_new_scrolls = 0 if found_new else consecutive_no_new_scrolls + 1
-        await page.evaluate("window.scrollBy(0, window.innerHeight * 0.9)")
-        await asyncio.sleep(2)
-    return profiles, complete
+def linkedin_session(headless: bool, unattended: bool):
+    """Yield (context, page) for a logged-in LinkedIn session; see `linkedin_pages.open_linkedin`."""
+    return open_linkedin(headless, unattended)
 
 
 async def close_stale_invitations(review_client, page: Page) -> int:
@@ -468,56 +265,10 @@ async def close_stale_invitations(review_client, page: Page) -> int:
         return 0
     closed = 0
     for key, thread_id in pending.items():
-        if key not in profiles:
-            await supersede_review(review_client, thread_id, "Invitation no longer pending on LinkedIn (handled outside Agent Inbox).")
+        if key not in profiles and await supersede_review(review_client, thread_id, "Invitation no longer pending on LinkedIn (handled outside Agent Inbox)."):
             logger.info("Closed stale invitation review %s as superseded.", key)
             closed += 1
     return closed
-
-
-async def apply_resolved_invitations(page: Page, review_client, human_decisions: dict[str, dict], num_to_process: int) -> list[Invitation]:
-    """Click the Accept/Ignore a human chose in Agent Inbox for visible invitations."""
-    results: list[Invitation] = []
-    processed_profiles: set[str] = set()
-    consecutive_no_new_scrolls = 0
-    max_no_new_scrolls = 5  # fail-safe to avoid infinite loop
-
-    while len(results) < num_to_process:
-        # DOM changes remove accepted/ignored cards, so always re-read the visible set
-        invitation_cards = await get_invitation_cards(page)
-        if not invitation_cards:
-            logger.info("No invitation cards currently visible.")
-            break
-        new_card_seen = False
-        for card in invitation_cards:
-            if len(results) >= num_to_process:
-                break
-            invitation = await get_invitation_info(card)
-            if not invitation or invitation.profile in processed_profiles:
-                continue
-            processed_profiles.add(invitation.profile)
-            new_card_seen = True
-            resolved_review = human_decisions.get(invitation.profile)
-            if not resolved_review:
-                continue
-            human_decision = approved_invitation_decision(resolved_review)
-            if human_decision and await execute_approved_action(card, human_decision):
-                invitation.decision = InvitationDecision(action=human_decision.action, reason=human_decision.reason)
-                await mark_applied(review_client, human_decision.thread_id)
-                logger.info(f"Applied human-approved decision for {invitation.name}: {human_decision.action.value}")
-                results.append(invitation)
-                await asyncio.sleep(1)
-        if len(results) >= num_to_process:
-            break
-        if new_card_seen:
-            consecutive_no_new_scrolls = 0
-            continue
-        consecutive_no_new_scrolls += 1
-        await page.evaluate("window.scrollBy(0, window.innerHeight * 0.9)")
-        await asyncio.sleep(2)
-        if consecutive_no_new_scrolls >= max_no_new_scrolls:
-            break
-    return results
 
 
 async def propose_new_invitations(page: Page, review_client, num_to_process: int, record_eval_cases: bool, unattended: bool) -> tuple[list[Invitation], ReviewCounts]:
@@ -547,7 +298,7 @@ async def propose_new_invitations(page: Page, review_client, num_to_process: int
             seen_profiles.add(invitation.profile)
             new_card_seen = True
 
-            existing = await find_review(review_client, GRAPH_ID, invitation.profile)
+            existing = await find_pending_review(review_client, GRAPH_ID, invitation.profile)
             if existing:
                 # Known item: no LLM call, and it must not count toward the processing cap.
                 bucket = classify_review(existing)
@@ -604,17 +355,13 @@ async def propose_new_invitations(page: Page, review_client, num_to_process: int
     return results, counts
 
 
-async def process_linkedin_invitations(num_to_process: int = 100, record_eval_cases: bool = False, headless: bool = False, apply_inbox_decisions: bool = False, cleanup_stale: bool = False, unattended: bool = False) -> ReviewCounts:
-    """Propose new invitations (default), or apply human decisions and/or close stale items.
+async def process_linkedin_invitations(num_to_process: int = 100, record_eval_cases: bool = False, headless: bool = False, cleanup_stale: bool = False, unattended: bool = False) -> ReviewCounts:
+    """Propose new invitations (default), or close stale items.
 
     `num_to_process` is a safety cap on NEW items; already-known invitations never count toward it.
     """
     logger.info("Starting LinkedIn invitation processing...")
     review_client = get_review_client()
-    human_decisions: dict[str, dict] = {}
-    if apply_inbox_decisions:
-        human_decisions = await fetch_resolved_reviews(review_client, GRAPH_ID)
-        logger.info("Found %d resolved Agent Inbox review(s).", len(human_decisions))
 
     counts = ReviewCounts()
     async with linkedin_session(headless, unattended) as (_context, page):
@@ -626,16 +373,8 @@ async def process_linkedin_invitations(num_to_process: int = 100, record_eval_ca
             logger.info("Found %d newsletter invitation(s); left pending because no human-approved action exists.", newsletter_invitation_count)
         await page.wait_for_selector("main#workspace, main, div[role='main']")
 
-        if apply_inbox_decisions or cleanup_stale:
-            if apply_inbox_decisions:
-                applied = await apply_resolved_invitations(page, review_client, human_decisions, num_to_process)
-                counts.applied = len(applied)
-                logger.info("Applied %d human-approved invitation decision(s).", len(applied))
-            if cleanup_stale:
-                if apply_inbox_decisions:
-                    await page.goto("https://www.linkedin.com/mynetwork/invitation-manager/")
-                    await page.wait_for_load_state("load")
-                counts.superseded = await close_stale_invitations(review_client, page)
+        if cleanup_stale:
+            counts.superseded = await close_stale_invitations(review_client, page)
             return counts
 
         results, counts = await propose_new_invitations(page, review_client, num_to_process, record_eval_cases, unattended)
@@ -656,7 +395,6 @@ if __name__ == "__main__":
     parser.add_argument("--record-eval-cases", action="store_true", help="Record eval cases to YAML file.")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode.")
     parser.add_argument("--send-to-inbox", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--apply-inbox-decisions", action="store_true", help="Apply accept/ignore decisions a human made in Agent Inbox.")
     parser.add_argument("--cleanup-stale", action="store_true", help="Close pending reviews for invitations no longer on LinkedIn (only after a full, non-empty scan).")
     parser.add_argument(
         "--model-backend",
@@ -669,4 +407,4 @@ if __name__ == "__main__":
     if args.model_backend and args.model_backend != MODEL_BACKEND:
         agent = build_agent(args.model_backend)
 
-    asyncio.run(process_linkedin_invitations(args.num_to_process, record_eval_cases=args.record_eval_cases, headless=args.headless, apply_inbox_decisions=args.apply_inbox_decisions, cleanup_stale=args.cleanup_stale))
+    asyncio.run(process_linkedin_invitations(args.num_to_process, record_eval_cases=args.record_eval_cases, headless=args.headless, cleanup_stale=args.cleanup_stale))

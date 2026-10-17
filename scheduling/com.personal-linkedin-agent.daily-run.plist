@@ -17,8 +17,6 @@
         <string>run</string>
         <string>python</string>
         <string>daily_run.py</string>
-        <string>--mode</string>
-        <string>full</string>
         <string>--headless</string>
     </array>
     <key>StartCalendarInterval</key>

@@ -18,6 +18,7 @@
         <string>langgraph</string>
         <string>dev</string>
         <string>--no-browser</string>
+        <string>--no-reload</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

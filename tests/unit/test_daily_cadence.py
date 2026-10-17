@@ -3,10 +3,11 @@ import pytest
 import daily_run
 import inbox_manager
 import invitations_manager
+import linkedin_pages
 from inbox_manager import ConversationMessage, InboxMessage
 from invitations_manager import Invitation, InvitationAction, InvitationDecision
 from review_graph import decision_from_response, message_result_from_response
-from review_queue import classify_review, fetch_pending_reviews, fetch_resolved_reviews, find_review, supersede_review
+from review_queue import classify_review, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_pending_review, supersede_review
 from tests.async_helpers import run_async_test
 from unattended import HealthCheckError, ReviewCounts
 
@@ -22,7 +23,7 @@ class FakeThreads:
         return self.threads[offset : offset + limit]
 
     async def get(self, thread_id):
-        return {"thread_id": thread_id, "metadata": {"kind": "graph"}}
+        return {"thread_id": thread_id, "status": "interrupted", "metadata": {"kind": "graph"}}
 
     async def update(self, thread_id, **kwargs):
         self.updated.append((thread_id, kwargs))
@@ -59,10 +60,10 @@ def test_pending_reviews_maps_key_to_thread():
     assert run_async_test(lambda: fetch_pending_reviews(client, "graph")) == {"k1": "a"}
 
 
-def test_find_review_and_classification():
-    client = FakeClient([{"thread_id": "a", "metadata": {"applied": True, "outcome": "superseded"}}])
-    assert run_async_test(lambda: find_review(client, "graph", "k"))["thread_id"] == "a"
-    assert run_async_test(lambda: find_review(FakeClient(), "graph", "k")) is None
+def test_find_pending_review_and_classification():
+    assert run_async_test(lambda: find_pending_review(FakeClient([{"thread_id": "a", "metadata": {}}]), "graph", "k"))["thread_id"] == "a"
+    assert run_async_test(lambda: find_pending_review(FakeClient([{"thread_id": "a", "metadata": {"applied": True, "outcome": "superseded"}}]), "graph", "k")) is None
+    assert run_async_test(lambda: find_pending_review(FakeClient(), "graph", "k")) is None
     assert classify_review({"metadata": {"applied": True, "outcome": "superseded"}}) == "superseded"
     assert classify_review({"metadata": {"applied": True}}) == "applied"
     assert classify_review({"metadata": {}}) == "already_queued"
@@ -71,7 +72,7 @@ def test_find_review_and_classification():
 def test_supersede_resumes_interrupt_and_marks_thread_never_deletes():
     client = FakeClient()
 
-    run_async_test(lambda: supersede_review(client, "t1", "handled elsewhere"))
+    assert run_async_test(lambda: supersede_review(client, "t1", "handled elsewhere")) is True
 
     assert client.runs.waited == [("t1", "graph", {"command": {"resume": [{"type": "superseded", "args": "handled elsewhere"}]}})]
     assert client.threads.updated == [("t1", {"metadata": {"applied": True, "outcome": "superseded", "superseded_reason": "handled elsewhere"}})]
@@ -123,13 +124,15 @@ def invitation_page(monkeypatch):
     async def no_sleep(_):
         return None
 
-    monkeypatch.setattr(invitations_manager, "get_invitation_cards", fake_cards)
-    monkeypatch.setattr(invitations_manager, "get_invitation_info", fake_info)
+    for module in (invitations_manager, linkedin_pages):
+        monkeypatch.setattr(module, "get_invitation_cards", fake_cards)
+        monkeypatch.setattr(module, "get_invitation_info", fake_info)
     monkeypatch.setattr(invitations_manager.asyncio, "sleep", no_sleep)
 
 
-def test_known_invitations_skip_llm_and_are_counted_separately(monkeypatch, invitation_page):
-    existing = {"p1": {"metadata": {}}, "p2": {"metadata": {"applied": True}}, "p3": {"metadata": {"applied": True, "outcome": "superseded"}}}
+def test_pending_invitations_skip_llm_and_closed_ones_are_requeued(monkeypatch, invitation_page):
+    # find_pending_review only returns pending threads; closed ones (p2) come back as new items.
+    existing = {"p1": {"metadata": {}}}
     llm_calls = []
 
     async def fake_find(client, graph_id, key):
@@ -142,14 +145,14 @@ def test_known_invitations_skip_llm_and_are_counted_separately(monkeypatch, invi
     async def fake_enqueue(client, graph_id, key, data):
         return True
 
-    monkeypatch.setattr(invitations_manager, "find_review", fake_find)
+    monkeypatch.setattr(invitations_manager, "find_pending_review", fake_find)
     monkeypatch.setattr(invitations_manager, "try_decision", fake_decision)
     monkeypatch.setattr(invitations_manager, "enqueue_review", fake_enqueue)
 
-    _, counts = run_async_test(lambda: invitations_manager.propose_new_invitations(FakePage(["new1", "p1", "p2", "p3"]), object(), 100, False, True))
+    _, counts = run_async_test(lambda: invitations_manager.propose_new_invitations(FakePage(["new1", "p1", "p2"]), object(), 100, False, True))
 
-    assert llm_calls == ["new1"]
-    assert (counts.new, counts.already_queued, counts.applied, counts.superseded) == (1, 1, 1, 1)
+    assert llm_calls == ["new1", "p2"]
+    assert (counts.new, counts.already_queued, counts.applied, counts.superseded) == (2, 1, 0, 0)
 
 
 def test_second_run_with_no_changes_creates_nothing(monkeypatch, invitation_page):
@@ -159,7 +162,7 @@ def test_second_run_with_no_changes_creates_nothing(monkeypatch, invitation_page
     async def unexpected(*args, **kwargs):
         raise AssertionError("known items must not hit the LLM or the queue")
 
-    monkeypatch.setattr(invitations_manager, "find_review", fake_find)
+    monkeypatch.setattr(invitations_manager, "find_pending_review", fake_find)
     monkeypatch.setattr(invitations_manager, "try_decision", unexpected)
     monkeypatch.setattr(invitations_manager, "enqueue_review", unexpected)
 
@@ -187,7 +190,7 @@ def test_failed_and_undecided_invitations_are_queued_for_judgment(monkeypatch, i
         queued[key] = data
         return True
 
-    monkeypatch.setattr(invitations_manager, "find_review", no_existing)
+    monkeypatch.setattr(invitations_manager, "find_pending_review", no_existing)
     monkeypatch.setattr(invitations_manager, "try_decision", fake_decision)
     monkeypatch.setattr(invitations_manager, "get_profile_info", fake_profile)
     monkeypatch.setattr(invitations_manager, "enqueue_review", fake_enqueue)
@@ -209,7 +212,7 @@ def test_safety_cap_is_reported(monkeypatch, invitation_page):
     async def fake_enqueue(client, graph_id, key, data):
         return True
 
-    monkeypatch.setattr(invitations_manager, "find_review", no_existing)
+    monkeypatch.setattr(invitations_manager, "find_pending_review", no_existing)
     monkeypatch.setattr(invitations_manager, "try_decision", fake_decision)
     monkeypatch.setattr(invitations_manager, "enqueue_review", fake_enqueue)
 
@@ -233,6 +236,7 @@ def stale_setup(monkeypatch, pending):
 
     async def fake_supersede(client, thread_id, reason):
         closed.append(thread_id)
+        return True
 
     monkeypatch.setattr(invitations_manager, "fetch_pending_reviews", fake_pending)
     monkeypatch.setattr(invitations_manager, "supersede_review", fake_supersede)
@@ -244,6 +248,37 @@ def test_stale_cleanup_closes_only_absent_profiles_after_full_scan(monkeypatch, 
 
     assert run_async_test(lambda: invitations_manager.close_stale_invitations(object(), FakePage(["here"]))) == 1
     assert closed == ["t2"]
+
+
+def test_stale_cleanup_does_not_count_skipped_busy_threads(monkeypatch, invitation_page):
+    async def fake_pending(client, graph_id):
+        return {"gone-busy": "busy-thread", "gone": "t2"}
+
+    async def fake_supersede(client, thread_id, reason):
+        return thread_id != "busy-thread"
+
+    monkeypatch.setattr(invitations_manager, "fetch_pending_reviews", fake_pending)
+    monkeypatch.setattr(invitations_manager, "supersede_review", fake_supersede)
+
+    assert run_async_test(lambda: invitations_manager.close_stale_invitations(object(), FakePage(["here"]))) == 1
+
+
+def test_new_message_does_not_count_skipped_busy_supersede(monkeypatch):
+    url = "https://www.linkedin.com/messaging/thread/1/"
+
+    async def fake_enqueue(client, graph_id, key, data):
+        return True
+
+    async def fake_supersede(client, thread_id, reason):
+        return False
+
+    monkeypatch.setattr(inbox_manager, "enqueue_review", fake_enqueue)
+    monkeypatch.setattr(inbox_manager, "supersede_review", fake_supersede)
+    pending = {inbox_manager.message_key(url, "old message"): "busy-thread"}
+
+    counts = run_async_test(lambda: inbox_manager.send_messages_to_inbox(object(), [msg(content="new message")], 4, pending))
+
+    assert (counts.new, counts.superseded) == (1, 0)
 
 
 def test_stale_cleanup_never_runs_on_empty_or_incomplete_scans(monkeypatch, invitation_page):
@@ -282,6 +317,7 @@ def test_new_message_supersedes_older_pending_item_for_same_conversation(monkeyp
 
     async def fake_supersede(client, thread_id, reason):
         superseded.append(thread_id)
+        return True
 
     monkeypatch.setattr(inbox_manager, "enqueue_review", fake_enqueue)
     monkeypatch.setattr(inbox_manager, "supersede_review", fake_supersede)
@@ -333,30 +369,96 @@ def test_self_replied_conversation_is_closed_only_when_author_is_certain(monkeyp
 
     async def fake_supersede(client, thread_id, reason):
         closed.append(thread_id)
+        return True
 
     monkeypatch.setattr(inbox_manager, "fetch_pending_reviews", fake_pending)
     monkeypatch.setattr(inbox_manager, "extract_conversation_messages", fake_extract)
     monkeypatch.setattr(inbox_manager, "supersede_review", fake_supersede)
 
-    run_async_test(lambda: inbox_manager.close_self_replied_messages(FakeMessagePage(author), object(), "Me Myself"))
+    monkeypatch.setattr(inbox_manager, "conversation_is_archived", async_value(False))
+
+    run_async_test(lambda: inbox_manager.close_handled_messages(FakeMessagePage(author), object(), "Me Myself"))
 
     assert closed == expected
 
 
-def test_finalize_only_marks_dismissals(monkeypatch):
-    marked = []
+def test_archived_pending_conversation_is_superseded(monkeypatch):
+    closed = []
+    key = inbox_manager.message_key("https://www.linkedin.com/messaging/thread/1/", "hello")
 
-    async def fake_fetch(client, graph_id):
-        return {"a": {"thread_id": "dismissed", "values": {"action": "dismiss"}}, "b": {"thread_id": "reply", "values": {"action": "reply", "reply": "x"}}}
+    async def fake_pending(client, graph_id):
+        return {key: "t1"}
 
-    async def fake_mark(client, thread_id):
-        marked.append(thread_id)
+    async def fake_extract(page, sender_name):
+        return [ConversationMessage(author="Grace", content="x", timestamp="")]
 
-    monkeypatch.setattr(inbox_manager, "fetch_resolved_reviews", fake_fetch)
-    monkeypatch.setattr(inbox_manager, "mark_applied", fake_mark)
+    async def fake_archived(page):
+        return True
 
-    assert run_async_test(lambda: inbox_manager.finalize_dismissed_messages(object())) == 1
-    assert marked == ["dismissed"]
+    async def fake_supersede(client, thread_id, reason):
+        closed.append((thread_id, reason))
+        return True
+
+    monkeypatch.setattr(inbox_manager, "fetch_pending_reviews", fake_pending)
+    monkeypatch.setattr(inbox_manager, "extract_conversation_messages", fake_extract)
+    monkeypatch.setattr(inbox_manager, "conversation_is_archived", fake_archived)
+    monkeypatch.setattr(inbox_manager, "supersede_review", fake_supersede)
+
+    assert run_async_test(lambda: inbox_manager.close_handled_messages(FakeMessagePage("Grace"), object(), "Me Myself")) == 1
+    assert closed == [("t1", "You archived this conversation on LinkedIn.")]
+
+
+def test_unknown_archive_state_keeps_item(monkeypatch):
+    key = inbox_manager.message_key("https://www.linkedin.com/messaging/thread/1/", "hello")
+
+    async def fake_pending(client, graph_id):
+        return {key: "t1"}
+
+    async def fake_extract(page, sender_name):
+        return [ConversationMessage(author="Grace", content="x", timestamp="")]
+
+    async def unknown_archived(page):
+        return None
+
+    async def unexpected_supersede(*args):
+        raise AssertionError("unknown archive state must keep the review")
+
+    monkeypatch.setattr(inbox_manager, "fetch_pending_reviews", fake_pending)
+    monkeypatch.setattr(inbox_manager, "extract_conversation_messages", fake_extract)
+    monkeypatch.setattr(inbox_manager, "conversation_is_archived", unknown_archived)
+    monkeypatch.setattr(inbox_manager, "supersede_review", unexpected_supersede)
+
+    assert run_async_test(lambda: inbox_manager.close_handled_messages(FakeMessagePage("Grace"), object(), "Me Myself")) == 0
+
+
+def async_value(value):
+    async def result(_page):
+        return value
+
+    return result
+
+
+def test_previously_dismissed_conversation_is_requeued_when_still_unanswered():
+    created = []
+
+    class ClosedThreads:
+        async def search(self, **kwargs):
+            assert kwargs["status"] in {"busy", "interrupted"}
+            return []
+
+        async def create(self, metadata):
+            created.append(metadata)
+            return {"thread_id": "new-thread"}
+
+    class Runs:
+        async def create(self, thread_id, graph_id, input):
+            created.append((thread_id, graph_id, input))
+
+    client = type("Client", (), {"threads": ClosedThreads(), "runs": Runs()})()
+    key = inbox_manager.message_key("https://www.linkedin.com/messaging/thread/1/", "same reply")
+
+    assert run_async_test(lambda: enqueue_review(client, "message_review", key, {"latest_message": "same reply"})) is True
+    assert created[0] == {"kind": "message_review", "key": key}
 
 
 # --- orchestrator ----------------------------------------------------------
@@ -365,40 +467,50 @@ def test_finalize_only_marks_dismissals(monkeypatch):
 def patch_steps(monkeypatch, *, invitations=None, messages=None):
     calls = []
 
+    async def fake_recover_and_retire():
+        calls.append(("recover + retire legacy", {}))
+        return 2, 3
+
     async def fake_invitations(**kwargs):
-        calls.append(("invitations", kwargs))
+        name = "invitations cleanup" if kwargs.get("cleanup_stale") else "invitations propose"
+        calls.append((name, kwargs))
         if isinstance(invitations, Exception):
             raise invitations
         return ReviewCounts(new=2, needs_judgment=1)
 
     async def fake_messages(**kwargs):
-        calls.append(("messages", kwargs))
+        name = "messages cleanup" if kwargs.get("cleanup_only") else "messages propose"
+        calls.append((name, kwargs))
         if isinstance(messages, Exception):
             raise messages
         return ReviewCounts(new=1)
 
     notes = []
+    monkeypatch.setattr(daily_run, "recover_and_retire_reviews", fake_recover_and_retire)
     monkeypatch.setattr(daily_run.invitations_manager, "process_linkedin_invitations", fake_invitations)
     monkeypatch.setattr(daily_run.inbox_manager, "manage_linkedin_inbox", fake_messages)
     monkeypatch.setattr(daily_run, "notify", lambda title, message: notes.append((title, message)))
     return calls, notes
 
 
-def test_full_run_orders_steps_and_summarizes(monkeypatch):
+def test_full_run_orders_sync_steps(monkeypatch):
     calls, notes = patch_steps(monkeypatch)
 
-    assert run_async_test(lambda: daily_run.run("full", True)) == daily_run.EXIT_OK
+    assert run_async_test(lambda: daily_run.run(True)) == daily_run.EXIT_OK
 
-    assert [(name, bool(kwargs.get("apply_inbox_decisions") or kwargs.get("cleanup_only"))) for name, kwargs in calls] == [("invitations", True), ("messages", True), ("invitations", False), ("messages", False)]
-    assert notes == [("LinkedIn agent", "3 new items in Agent Inbox (1 need judgment)")]
+    assert [name for name, _ in calls] == ["recover + retire legacy", "invitations cleanup", "messages cleanup", "invitations propose", "messages propose"]
+    assert notes == [
+        (
+            "LinkedIn agent",
+            "3 new items in Agent Inbox (1 need judgment), 2 interrupted action(s) brought back for review, 3 old decision(s) from before live actions were retired; anything still open on LinkedIn was queued again",
+        )
+    ]
 
 
-def test_apply_mode_never_proposes(monkeypatch):
-    calls, notes = patch_steps(monkeypatch)
-
-    assert run_async_test(lambda: daily_run.run("apply", True)) == daily_run.EXIT_OK
-
-    assert len(calls) == 2 and notes == []
+def test_legacy_and_recovered_counts_appear_in_summary():
+    summary = daily_run.build_summary(ReviewCounts(new=1), [], recovered=2, retired=3)
+    assert "2 interrupted action(s) brought back for review" in summary
+    assert "3 old decision(s) from before live actions were retired; anything still open on LinkedIn was queued again" in summary
 
 
 def test_expired_login_notifies_and_exits_nonzero_without_further_steps(monkeypatch):
@@ -406,13 +518,13 @@ def test_expired_login_notifies_and_exits_nonzero_without_further_steps(monkeypa
 
     calls, notes = patch_steps(monkeypatch, invitations=LoginRequiredError("expired"))
 
-    assert run_async_test(lambda: daily_run.run("full", True)) == daily_run.EXIT_LOGIN
-    assert len(calls) == 1
+    assert run_async_test(lambda: daily_run.run(True)) == daily_run.EXIT_LOGIN
+    assert len(calls) == 2
     assert notes[0][0] == "LinkedIn login needed"
 
 
 def test_health_failure_continues_but_exits_nonzero(monkeypatch):
     calls, notes = patch_steps(monkeypatch, messages=HealthCheckError("zero conversations"))
 
-    assert run_async_test(lambda: daily_run.run("full", True)) == daily_run.EXIT_HEALTH
+    assert run_async_test(lambda: daily_run.run(True)) == daily_run.EXIT_HEALTH
     assert "warning" in notes[-1][1]

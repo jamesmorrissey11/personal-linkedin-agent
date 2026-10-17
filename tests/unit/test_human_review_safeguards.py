@@ -1,7 +1,4 @@
-from typing import cast
-
 import pytest
-from playwright.async_api import ElementHandle
 
 import inbox_manager
 import invitations_manager
@@ -123,21 +120,6 @@ def test_invitation_queue_failure_is_surfaced_without_clicking(monkeypatch):
     assert card.ignore.clicks == 0
 
 
-def test_only_valid_resolved_invitation_review_can_execute():
-    assert invitations_manager.approved_invitation_decision({"values": {}}) is None
-    assert invitations_manager.approved_invitation_decision({"thread_id": "thread", "values": {"decision": "undecided"}}) is None
-    assert invitations_manager.approved_invitation_decision({"values": {"decision": "accept"}}) is None
-
-    approved = invitations_manager.approved_invitation_decision({"thread_id": "thread", "values": {"decision": "ignore"}})
-    assert approved is not None
-    card = FakeInvitationCard()
-    applied = run_async_test(lambda: invitations_manager.execute_approved_action(cast(ElementHandle, card), approved))
-
-    assert applied is True
-    assert card.accept.clicks == 0
-    assert card.ignore.clicks == 1
-
-
 def test_every_message_where_other_person_spoke_last_is_queued_with_labels(monkeypatch):
     queued = []
 
@@ -178,87 +160,3 @@ def test_message_queue_failure_is_surfaced(monkeypatch):
 
     with pytest.raises(RuntimeError, match="review server unavailable"):
         run_async_test(lambda: inbox_manager.send_messages_to_inbox(object(), [message()], min_urgency=4))
-
-
-def test_approved_message_review_navigates_but_never_sends_and_marks_after_navigation(monkeypatch):
-    events = []
-    resolved = {
-        "reply": {
-            "thread_id": "reply-thread",
-            "values": {
-                "action": "reply",
-                "reply": "Approved reply",
-                "sender_name": "Grace",
-                "conversation_url": "https://www.linkedin.com/messaging/thread/1/",
-            },
-        },
-        "dismiss": {"thread_id": "dismiss-thread", "values": {"action": "dismiss"}},
-        "malformed": {"thread_id": "bad-thread", "values": {"action": "reply", "reply": 5}},
-        "external": {
-            "thread_id": "external-thread",
-            "values": {"action": "reply", "reply": "Approved", "conversation_url": "https://example.com/messages/"},
-        },
-        "missing-thread": {"values": {"action": "dismiss"}},
-    }
-
-    async def fake_fetch(client, graph_id):
-        return resolved
-
-    async def fake_mark(client, thread_id):
-        events.append(("mark", thread_id))
-
-    class Page:
-        async def goto(self, url):
-            events.append(("goto", url))
-
-        async def click(self, *args, **kwargs):
-            raise AssertionError("message application must never click a send control")
-
-    class Context:
-        async def new_page(self):
-            events.append(("new_page",))
-            return Page()
-
-    monkeypatch.setattr(inbox_manager, "fetch_resolved_reviews", fake_fetch)
-    monkeypatch.setattr(inbox_manager, "mark_applied", fake_mark)
-
-    applied = run_async_test(lambda: inbox_manager.apply_message_reviews(Context(), object()))
-
-    assert applied == 2
-    assert events == [
-        ("new_page",),
-        ("goto", "https://www.linkedin.com/messaging/thread/1/"),
-        ("mark", "reply-thread"),
-        ("mark", "dismiss-thread"),
-    ]
-
-
-def test_failed_message_navigation_is_not_marked_applied(monkeypatch):
-    async def fake_fetch(client, graph_id):
-        return {
-            "reply": {
-                "thread_id": "reply-thread",
-                "values": {"action": "reply", "reply": "Approved", "conversation_url": "https://www.linkedin.com/messaging/thread/1/"},
-            }
-        }
-
-    async def unexpected_mark(client, thread_id):
-        raise AssertionError("failed navigation must not consume the approval")
-
-    class Page:
-        async def goto(self, url):
-            raise RuntimeError("navigation failed")
-
-    class Context:
-        async def new_page(self):
-            return Page()
-
-    monkeypatch.setattr(inbox_manager, "fetch_resolved_reviews", fake_fetch)
-    monkeypatch.setattr(inbox_manager, "mark_applied", unexpected_mark)
-
-    try:
-        run_async_test(lambda: inbox_manager.apply_message_reviews(Context(), object()))
-    except RuntimeError as error:
-        assert str(error) == "navigation failed"
-    else:
-        raise AssertionError("navigation failure should be surfaced")
