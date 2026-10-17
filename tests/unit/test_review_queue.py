@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from review_queue import INTERRUPTED_NOTE, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_pending_review, mark_applied, mark_outcome, recover_stuck_reviews, retire_legacy_reviews
+from review_queue import INTERRUPTED_NOTE, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_pending_review, mark_applied, mark_outcome, recover_stuck_reviews, retire_legacy_reviews, supersede_review
 from tests.async_helpers import run_async_test
 
 NOW = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)
@@ -20,6 +20,9 @@ class FakeThreads:
         self.created.append(kwargs)
         return {"thread_id": f"new-{len(self.created)}"}
 
+    async def get(self, thread_id):
+        return next(t for t in self.threads if t["thread_id"] == thread_id)
+
     async def update(self, thread_id, **kwargs):
         self.updated.append((thread_id, kwargs))
         for t in self.threads:
@@ -32,9 +35,13 @@ class FakeRuns:
         self.runs = runs or {}
         self.created = []
         self.cancelled = []
+        self.waited = []
 
     async def create(self, thread_id, graph_id, **kwargs):
         self.created.append((thread_id, graph_id, kwargs))
+
+    async def wait(self, thread_id, graph_id, **kwargs):
+        self.waited.append((thread_id, graph_id, kwargs))
 
     async def list(self, thread_id, **kwargs):
         return self.runs.get(thread_id, [])
@@ -157,3 +164,19 @@ def test_retire_legacy_marks_unapplied_idle_threads():
 
     assert retired == 1
     assert client.threads.updated == [("legacy", {"metadata": {"applied": True, "outcome": "legacy"}})]
+
+
+def test_supersede_skips_busy_thread_without_resuming_or_marking():
+    client = FakeClient([thread("t1", "busy")])
+
+    assert run_async_test(lambda: supersede_review(client, "t1", "gone")) is False
+    assert client.runs.waited == []
+    assert client.threads.updated == []
+
+
+def test_supersede_resumes_and_marks_interrupted_thread():
+    client = FakeClient([thread("t1", "interrupted")])
+
+    assert run_async_test(lambda: supersede_review(client, "t1", "gone")) is True
+    assert client.runs.waited == [("t1", "graph", {"command": {"resume": [{"type": "superseded", "args": "gone"}]}})]
+    assert client.threads.updated == [("t1", {"metadata": {"applied": True, "outcome": "superseded", "superseded_reason": "gone"}})]

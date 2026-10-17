@@ -91,14 +91,22 @@ async def fetch_pending_reviews(client, graph_id: str) -> dict[str, str]:
     return pending
 
 
-async def supersede_review(client, thread_id: str, reason: str) -> None:
-    """Close a pending review as a no-op by resuming it with a `superseded` response. Never deletes the thread."""
+async def supersede_review(client, thread_id: str, reason: str) -> bool:
+    """Close a pending review as a no-op by resuming it with a `superseded` response. Never deletes the thread.
+
+    Only interrupted threads are resumed; a busy one is mid-action (stuck ones are left to recovery), so it is
+    skipped and False is returned. Returns True when the thread was superseded.
+    """
     thread = await client.threads.get(thread_id)
+    if thread.get("status") != "interrupted":
+        logger.info("Not superseding %s: thread is %s, not interrupted.", thread_id, thread.get("status"))
+        return False
     graph_id = (thread.get("metadata") or {}).get("kind")
     if not graph_id:
         raise ValueError(f"Thread {thread_id} has no graph kind in its metadata")
     await client.runs.wait(thread_id, graph_id, command={"resume": [{"type": "superseded", "args": reason}]})
     await mark_outcome(client, thread_id, "superseded", superseded_reason=reason)
+    return True
 
 
 async def mark_applied(client, thread_id: str) -> None:

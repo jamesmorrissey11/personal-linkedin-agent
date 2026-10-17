@@ -23,7 +23,7 @@ class FakeThreads:
         return self.threads[offset : offset + limit]
 
     async def get(self, thread_id):
-        return {"thread_id": thread_id, "metadata": {"kind": "graph"}}
+        return {"thread_id": thread_id, "status": "interrupted", "metadata": {"kind": "graph"}}
 
     async def update(self, thread_id, **kwargs):
         self.updated.append((thread_id, kwargs))
@@ -72,7 +72,7 @@ def test_find_pending_review_and_classification():
 def test_supersede_resumes_interrupt_and_marks_thread_never_deletes():
     client = FakeClient()
 
-    run_async_test(lambda: supersede_review(client, "t1", "handled elsewhere"))
+    assert run_async_test(lambda: supersede_review(client, "t1", "handled elsewhere")) is True
 
     assert client.runs.waited == [("t1", "graph", {"command": {"resume": [{"type": "superseded", "args": "handled elsewhere"}]}})]
     assert client.threads.updated == [("t1", {"metadata": {"applied": True, "outcome": "superseded", "superseded_reason": "handled elsewhere"}})]
@@ -236,6 +236,7 @@ def stale_setup(monkeypatch, pending):
 
     async def fake_supersede(client, thread_id, reason):
         closed.append(thread_id)
+        return True
 
     monkeypatch.setattr(invitations_manager, "fetch_pending_reviews", fake_pending)
     monkeypatch.setattr(invitations_manager, "supersede_review", fake_supersede)
@@ -247,6 +248,37 @@ def test_stale_cleanup_closes_only_absent_profiles_after_full_scan(monkeypatch, 
 
     assert run_async_test(lambda: invitations_manager.close_stale_invitations(object(), FakePage(["here"]))) == 1
     assert closed == ["t2"]
+
+
+def test_stale_cleanup_does_not_count_skipped_busy_threads(monkeypatch, invitation_page):
+    async def fake_pending(client, graph_id):
+        return {"gone-busy": "busy-thread", "gone": "t2"}
+
+    async def fake_supersede(client, thread_id, reason):
+        return thread_id != "busy-thread"
+
+    monkeypatch.setattr(invitations_manager, "fetch_pending_reviews", fake_pending)
+    monkeypatch.setattr(invitations_manager, "supersede_review", fake_supersede)
+
+    assert run_async_test(lambda: invitations_manager.close_stale_invitations(object(), FakePage(["here"]))) == 1
+
+
+def test_new_message_does_not_count_skipped_busy_supersede(monkeypatch):
+    url = "https://www.linkedin.com/messaging/thread/1/"
+
+    async def fake_enqueue(client, graph_id, key, data):
+        return True
+
+    async def fake_supersede(client, thread_id, reason):
+        return False
+
+    monkeypatch.setattr(inbox_manager, "enqueue_review", fake_enqueue)
+    monkeypatch.setattr(inbox_manager, "supersede_review", fake_supersede)
+    pending = {inbox_manager.message_key(url, "old message"): "busy-thread"}
+
+    counts = run_async_test(lambda: inbox_manager.send_messages_to_inbox(object(), [msg(content="new message")], 4, pending))
+
+    assert (counts.new, counts.superseded) == (1, 0)
 
 
 def test_stale_cleanup_never_runs_on_empty_or_incomplete_scans(monkeypatch, invitation_page):
@@ -285,6 +317,7 @@ def test_new_message_supersedes_older_pending_item_for_same_conversation(monkeyp
 
     async def fake_supersede(client, thread_id, reason):
         superseded.append(thread_id)
+        return True
 
     monkeypatch.setattr(inbox_manager, "enqueue_review", fake_enqueue)
     monkeypatch.setattr(inbox_manager, "supersede_review", fake_supersede)
@@ -336,6 +369,7 @@ def test_self_replied_conversation_is_closed_only_when_author_is_certain(monkeyp
 
     async def fake_supersede(client, thread_id, reason):
         closed.append(thread_id)
+        return True
 
     monkeypatch.setattr(inbox_manager, "fetch_pending_reviews", fake_pending)
     monkeypatch.setattr(inbox_manager, "extract_conversation_messages", fake_extract)

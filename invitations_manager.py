@@ -309,8 +309,7 @@ async def close_stale_invitations(review_client, page: Page) -> int:
         return 0
     closed = 0
     for key, thread_id in pending.items():
-        if key not in profiles:
-            await supersede_review(review_client, thread_id, "Invitation no longer pending on LinkedIn (handled outside Agent Inbox).")
+        if key not in profiles and await supersede_review(review_client, thread_id, "Invitation no longer pending on LinkedIn (handled outside Agent Inbox)."):
             logger.info("Closed stale invitation review %s as superseded.", key)
             closed += 1
     return closed

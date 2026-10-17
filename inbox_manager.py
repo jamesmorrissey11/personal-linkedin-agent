@@ -347,8 +347,7 @@ async def close_self_replied_messages(page: Page, review_client, logged_in_user:
         except Exception as e:
             logger.warning("Could not check %s; keeping its review: %s", url, e)
             continue
-        if latest_message_is_from_user(messages, logged_in_user):
-            await supersede_review(review_client, thread_id, "You replied on LinkedIn.")
+        if latest_message_is_from_user(messages, logged_in_user) and await supersede_review(review_client, thread_id, "You replied on LinkedIn."):
             logger.info("Closed %s as superseded (you replied).", url)
             closed += 1
     return closed
@@ -385,9 +384,9 @@ async def send_messages_to_inbox(review_client, messages: list[InboxMessage], mi
             counts.new += 1
             for old_key, old_thread_id in list(pending.items()):
                 if old_key != key and conversation_url_from_key(old_key) == msg.conversation_url:
-                    await supersede_review(review_client, old_thread_id, "A newer message arrived in this conversation.")
+                    if await supersede_review(review_client, old_thread_id, "A newer message arrived in this conversation."):
+                        counts.superseded += 1
                     del pending[old_key]
-                    counts.superseded += 1
         else:
             counts.already_queued += 1
     return counts
@@ -452,9 +451,9 @@ async def manage_linkedin_inbox(
             if msg.from_user:
                 for key, thread_id in list(pending.items()):
                     if conversation_url_from_key(key) == msg.conversation_url:
-                        await supersede_review(review_client, thread_id, "You replied on LinkedIn.")
+                        if await supersede_review(review_client, thread_id, "You replied on LinkedIn."):
+                            counts.superseded += 1
                         del pending[key]
-                        counts.superseded += 1
         counts.cap_hit = cap_hit
         logger.info("\n=== LinkedIn Inbox Management Report ===")
         logger.info("Messages: %s", counts.describe())
