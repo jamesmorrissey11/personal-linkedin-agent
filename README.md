@@ -3,9 +3,14 @@
 [![Open in GitHub Codespaces](https://img.shields.io/static/v1?style=for-the-badge&label=GitHub+Codespaces&message=Open&color=brightgreen&logo=github)](https://codespaces.new/jamesmorrissey11/personal-linkedin-agent)
 [![Open in Dev Containers](https://img.shields.io/static/v1?style=for-the-badge&label=Dev%20Containers&message=Open&color=blue&logo=visualstudiocode)](https://vscode.dev/redirect?url=vscode://ms-vscode-remote.remote-containers/cloneInVolume?url=https://github.com/jamesmorrissey11/personal-linkedin-agent)
 
-This repository provides an AI-powered agent for managing personal LinkedIn accounts. The agent uses [Pydantic AI](https://ai.pydantic.dev/) for LLM-based decisions and [Playwright](https://playwright.dev/python/) for browser automation. It can process LinkedIn invitations, deciding whether to accept or ignore them based on customizable criteria. See [the demo video](https://www.youtube.com/live/-OsgE9yBkFE) to see the agent in action.
+This repository provides an AI-assisted agent for triaging a personal LinkedIn account. Each day it reads your pending invitations and messages and uses an LLM ([Pydantic AI](https://ai.pydantic.dev/)) to propose what to do. You decide each item in [Agent Inbox](https://github.com/langchain-ai/agent-inbox), and your decision is carried out on LinkedIn right away with [Playwright](https://playwright.dev/python/). See [the demo video](https://www.youtube.com/live/-OsgE9yBkFE) to see the original agent in action.
+
+> [!IMPORTANT]
+> **Read [docs/SAFETY.md](docs/SAFETY.md) before running anything against your account.** Nothing is accepted, ignored, sent, or archived on LinkedIn unless you chose it for that one item in Agent Inbox; the LLM only suggests. Automating LinkedIn still carries risk (terms of service, account restrictions), and choosing a hosted model sends LinkedIn text to that provider.
 
 - [Personal AI Agent for LinkedIn](#personal-ai-agent-for-linkedin)
+  - [Daily workflow](#daily-workflow)
+  - [What must be running](#what-must-be-running)
   - [Getting started](#getting-started)
     - [GitHub Codespaces](#github-codespaces)
     - [VS Code Dev Containers](#vs-code-dev-containers)
@@ -14,11 +19,42 @@ This repository provides an AI-powered agent for managing personal LinkedIn acco
   - [Configuring OpenAI models](#configuring-openai-models)
   - [Configuring Ollama Models](#configuring-ollama-models)
   - [Running the invitation manager](#running-the-invitation-manager)
+  - [Human review with Agent Inbox](#human-review-with-agent-inbox)
+  - [No LinkedIn action happens without human approval](#no-linkedin-action-happens-without-human-approval)
+  - [Daily unattended workflow](#daily-unattended-workflow)
   - [Running the inbox manager](#running-the-inbox-manager)
   - [Running evaluations](#running-evaluations)
   - [Cost estimate](#cost-estimate)
+  - [Runtime state](#runtime-state)
   - [Architecture](#architecture)
   - [Resources](#resources)
+
+## Daily workflow
+
+The full guide, with a component diagram, what each button does, and a troubleshooting table, is [docs/DAILY_WORKFLOW.md](docs/DAILY_WORKFLOW.md).
+
+**One-time setup**
+
+1. Set up the project ([Getting started](#getting-started)), `cp .env.example .env`, and pick a model backend ([Ollama](#configuring-ollama-models) is the default).
+2. Install the Agent Inbox UI: `git submodule update --init && (cd deploy/agent-inbox && yarn install)`.
+3. Log in to LinkedIn once with a visible browser: `uv run linkedin-agent invitations --num-to-process 1`.
+4. Start the server and the UI (below), then in the UI add two inboxes at `http://localhost:2024`: Graph IDs `invitation_review` and `message_review`.
+5. Optional: schedule the daily sync and keep the server running with launchd ([`deploy/launchd/README.md`](deploy/launchd/README.md)).
+
+**Every day**
+
+1. Make sure the server is up, and queue new items (launchd does this at 06:30): `uv run linkedin-agent daily`.
+2. Open Agent Inbox at <http://localhost:3000> and decide each item. **Accept**, **Edit**, and **Ignore** act on LinkedIn right away; anything that fails comes back with a note.
+
+## What must be running
+
+| Process | Start it with | Needed | Check it's up |
+|---|---|---|---|
+| LangGraph server | `uv run linkedin-agent server` | Whenever you review or a sync runs | `curl -s localhost:2024/ok` prints `{"ok":true}` |
+| Agent Inbox UI | `cd deploy/agent-inbox && yarn dev` | While you review | Open <http://localhost:3000> |
+| Ollama (default model backend) | `ollama serve` | When a run proposes new items | `curl -s localhost:11434/v1/models` |
+
+If one of these isn't running, commands stop before touching LinkedIn and print a one-line cause and fix, for example `error: Can't reach the LangGraph server at http://localhost:2024. Start it with uv run linkedin-agent server`.
 
 ## Getting started
 
@@ -235,6 +271,8 @@ Newsletter invitations are left pending because the current scraper cannot relia
 Environment variables (read from the environment or `.env`, never logged): `LANGGRAPH_URL` (default `http://localhost:2024`) and `LANGSMITH_API_KEY` (falls back to `LANGSMITH_PERSONAL_ACCESS_TOKEN`; a local `langgraph dev` server doesn't check it).
 
 ## No LinkedIn action happens without human approval
+
+Full list of safeguards (with the code and tests that enforce each), risks, and recommended practices: [docs/SAFETY.md](docs/SAFETY.md).
 
 **Nothing is accepted, ignored, sent, or archived on LinkedIn unless you chose it for that one item in Agent Inbox. The LLM only suggests.** Deleting, reporting, blocking, leaving, recalling, or bulk-approving remains unsupported. `src/linkedin_agent/linkedin/guard.py` enforces this in layers:
 
