@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "invitation_review": "./review_graph.py:graph"
+  },
+  "env": ".env"
+}

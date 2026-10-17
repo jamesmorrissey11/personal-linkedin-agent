@@ -183,9 +183,23 @@ Available flags:
 * `--num-to-process` (default `10`): number of invitations to process before stopping.
 * `--record-eval-cases`: append each processed invitation as a new case to `linkedin_invitation_cases.yaml`, for later use with `evals.py`.
 * `--headless`: run the browser without a visible window.
+* `--send-to-inbox`: send invitations the agent is still undecided about (after the profile fallback) to Agent Inbox for human review, leaving them pending. See [Human review with Agent Inbox](#human-review-with-agent-inbox).
+* `--apply-inbox-decisions`: apply accept/ignore decisions a human already made in Agent Inbox.
 * `--model-backend` (`ollama` | `azure` | `fallback`, default: `MODEL_BACKEND` env var, itself defaulting to `ollama`): which model backend to use. See [Configuring Ollama Models](#configuring-ollama-models).
 
 On first run (or whenever the saved session expires), a browser window opens to `linkedin.com/login` and waits for you to log in manually; the resulting session is cached to `playwright/.auth/state.json` so future runs skip the login step.
+
+## Human review with Agent Inbox
+
+Undecided invitations can be resolved by a human in [Agent Inbox](https://github.com/langchain-ai/agent-inbox), included as a git submodule in `agent-inbox/`. `review_graph.py` is a LangGraph graph (`invitation_review`) that pauses with an `interrupt` for each invitation; Agent Inbox renders it with **Accept** / **Ignore** buttons.
+
+1. Fetch the UI and install it (requires Node.js and yarn): `git submodule update --init && (cd agent-inbox && yarn install)`
+2. Start the LangGraph server: `uv run langgraph dev --no-browser` (serves `http://localhost:2024`)
+3. Start the UI: `cd agent-inbox && yarn dev` and open <http://localhost:3000>. In **Settings**, enter your LangSmith API key, then **Add Inbox** with Assistant/Graph ID `invitation_review` and Deployment URL `http://localhost:2024`.
+4. Queue undecided invitations: `uv run python invitations_manager.py --send-to-inbox`
+5. Resolve them in the inbox, then apply the decisions to LinkedIn: `uv run python invitations_manager.py --apply-inbox-decisions`
+
+Environment variables (read from the environment or `.env`, never logged): `LANGGRAPH_URL` (default `http://localhost:2024`) and `LANGSMITH_API_KEY` (falls back to `LANGSMITH_PERSONAL_ACCESS_TOKEN`; a local `langgraph dev` server doesn't check it).
 
 ## Running the inbox manager
 

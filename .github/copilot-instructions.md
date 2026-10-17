@@ -18,6 +18,7 @@ There is no frontend/backend split, no database, and no shared library — see "
 | `invitations_manager.py` | Main CLI. Scrapes invitation cards, runs a `pydantic_ai.Agent` to decide accept/ignore/undecided per invitation, clicks the corresponding button. Falls back to loading the full profile page when undecided. |
 | `inbox_manager.py` | Secondary CLI. Scrapes recent conversations, runs a separate `Agent` to score each thread's reply urgency (1-10), opens the highest-priority thread. |
 | `evals.py` | Runs `pydantic_evals` regression checks (`CorrectDecisionEvaluator`, `IsInstance`) against the invitation-decision agent, using cases from `linkedin_invitation_cases.yaml`. Imports `agent` directly from `invitations_manager`. |
+| `review_graph.py` | LangGraph graph (`langgraph.json`, served by `uv run langgraph dev`) that interrupts for human accept/ignore of undecided invitations; `review_queue.py` is the SDK client used by `invitations_manager.py --send-to-inbox` / `--apply-inbox-decisions`. The Agent Inbox UI lives in the `agent-inbox/` git submodule (excluded from ruff). |
 
 Run them directly, e.g.:
 
