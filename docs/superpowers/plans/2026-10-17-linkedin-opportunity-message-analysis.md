@@ -4,7 +4,7 @@
 
 **Goal:** Build an accuracy-first CLI that incrementally collects relevant LinkedIn recruiting messages, extracts evidence-backed skills and experience once per opportunity, persists the private dataset locally, and generates grouped Markdown reports.
 
-**Architecture:** Add a root `message_analyzer.py` entry point backed by a feature-specific `message_analysis` package for models, SQLite persistence, Playwright collection, Pydantic AI analysis, and reporting. Keep this pipeline independent from `inbox_manager.py`; use deterministic code for identity, deduplication, counting, and report assembly, while LLM agents handle opportunity segmentation, grounded extraction, verification, normalization proposals, and taxonomy grouping.
+**Architecture:** Add a root `message_analyzer.py` entry point backed by a feature-specific `message_analysis` package for models, SQLite persistence, Playwright collection, Pydantic AI analysis, and reporting. Keep this pipeline independent from `inbox_manager.py`, but open LinkedIn only through the shared read-only session in `linkedin_pages.py` (lock and write guard, from #46); use deterministic code for identity, deduplication, counting, and report assembly, while LLM agents handle opportunity segmentation, grounded extraction, verification, normalization proposals, and taxonomy grouping.
 
 **Tech Stack:** Python 3.10+, Playwright, Pydantic, Pydantic AI structured output, Azure OpenAI/OpenAI, SQLite from the standard library, pytest, pytest-playwright, pydantic-evals, Ruff, uv
 
@@ -12,7 +12,9 @@
 
 ## Global Constraints
 
-- Analyze only LinkedIn's Focused inbox.
+- Analyze LinkedIn's Focused inbox and its Archived folder, never the Other inbox. Ignore in Agent Inbox archives conversations (#46), so declined recruiter messages are in Archived.
+- Open LinkedIn only with `linkedin_pages.open_linkedin(headless, unattended, lock_timeout=LOCK_TIMEOUT_SECONDS)` and never pass `approval`. Route every click through `linkedin_guard.safe_click`. Never type, press keys, or import `linkedin_actions`. Collection must not send, archive, or mark anything read.
+- Use a short lock timeout and exit nonzero when another LinkedIn task holds the lock. Release the session before model analysis starts.
 - Initial collection history is exactly 30 days unless `--initial-days` overrides it.
 - Relevant role families are Machine Learning Engineer, AI/LLM Engineer, Applied Scientist, Research Engineer, and MLOps/ML Platform Engineer.
 - Exclude Data Scientist, data-engineering-only, and mixed roles where machine learning is not the primary function.
@@ -22,7 +24,7 @@
 - Every retained extraction requires an exact quote in a stored source message.
 - Raw messages, SQLite data, and reports stay under `.linkedin-analysis/` and must be git-ignored.
 - Follow `invitations_manager.py`'s Azure OpenAI setup, including `AzureDeveloperCliCredential` and the `/openai/v1` base URL.
-- Do not alter `inbox_manager.py`, its urgency ranking, or Agent Inbox behavior.
+- Do not alter `inbox_manager.py`, its urgency ranking, or Agent Inbox behavior and its live actions.
 - Preserve multi-selector and accessibility-label scraping fallback chains.
 - Use `uv run` for all repository commands and Ruff for linting and formatting.
 
@@ -32,6 +34,8 @@
 - A conversation contains two roles: segmentation must create separate opportunities and preserve each role's evidence.
 - A role is adjacent or mixed: Data Scientist and primarily data-engineering work must remain excluded while configured ML-adjacent families remain included.
 - The model returns a plausible but nonexistent quote: validation must reject it and expose the failed item rather than count it.
+- A conversation was ignored in Agent Inbox (archived) after an earlier run: it must be found in Archived and updated by URL, not duplicated or lost.
+- Opening conversations during collection must not mark them read: every messaging write is blocked by the guard.
 - A run partially fails after collecting data: successful raw data must persist, watermarks must not advance incorrectly, and any generated report must be labeled partial with a nonzero exit.
 
 ---
@@ -93,41 +97,44 @@ git commit -m "feat(analysis): add private message analysis storage
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
 
-### Task 2: Focused Inbox Incremental Collector
+### Task 2: Focused and Archived Incremental Collector
 
 **Files:**
 - Create: `message_analysis/scraper.py`
 - Create: `tests/playwright/test_message_analysis_scraping.py`
 - Create: `tests/playwright/fixtures/focused_inbox.html`
 - Create: `tests/playwright/fixtures/focused_conversation_history.html`
+- Create: `tests/playwright/fixtures/archived_inbox.html`
+- Modify: `tests/unit/test_no_message_writes.py` (scan `message_analysis/**/*.py` too)
 
 **Interfaces:**
 - Consumes: `AnalysisStore`, `CollectedConversation`, and `MessageRecord` from Task 1.
-- Produces: `async ensure_focused_inbox(page: Page) -> None`.
-- Produces: `async collect_focused_messages(page: Page, store: AnalysisStore, cutoff: datetime, overlap: timedelta) -> CollectionSummary`.
-- Produces: selector fallback constants for the Focused tab, conversation cards, message events, authors, bodies, timestamps, and scroll containers.
+- Consumes: `linkedin_pages.open_linkedin` (session, lock, write guard) and `linkedin_guard.safe_click`.
+- Produces: `async ensure_folder(page: Page, folder: Literal["focused", "archived"]) -> None`.
+- Produces: `async collect_messages(page: Page, store: AnalysisStore, cutoff: datetime, overlap: timedelta) -> CollectionSummary`, covering Focused then Archived and recording each conversation's folder.
+- Produces: selector fallback constants for the Focused tab, the Archived folder, conversation cards, message events, authors, bodies, timestamps, and scroll containers.
 
-- [ ] **Step 1: Write failing Focused-inbox fixture tests**
+- [ ] **Step 1: Write failing folder fixture tests**
 
-Add tests proving the collector selects Focused rather than Other, uses at least one accessibility-label fallback, and raises a specific `FocusedInboxUnavailableError` instead of reading an unknown inbox.
+Add tests proving the collector selects Focused rather than Other, then the Archived folder, uses at least one accessibility-label fallback for each, and raises a specific `InboxFolderUnavailableError` naming the missing folder instead of reading an unknown inbox. Run the fixtures in a context with `install_linkedin_write_guard(context)` and assert that opening conversations produces no messaging write, even though the fixture page fires read-receipt and "mark as seen" requests.
 
-- [ ] **Step 2: Run the Focused-inbox tests and verify they fail**
+- [ ] **Step 2: Run the folder tests and verify they fail**
 
 Run: `uv run pytest tests/playwright/test_message_analysis_scraping.py -v`
 
 Expected: FAIL because the scraper and fixtures do not exist.
 
-- [ ] **Step 3: Implement Focused inbox activation and selector fallbacks**
+- [ ] **Step 3: Implement folder activation and selector fallbacks**
 
-Implement `ensure_focused_inbox()` with bounded waits and explicit errors. Do not fall back to the default visible inbox if Focused cannot be confirmed.
+Implement `ensure_folder()` with bounded waits and explicit errors, clicking only through `safe_click`. Do not fall back to the default visible inbox if the requested folder cannot be confirmed.
 
 - [ ] **Step 4: Write failing collection-window and overlap tests**
 
-Cover a 30-day cutoff, seven-day incremental overlap, scrolling until older conversations are reached, machine-readable timestamps, displayed timestamp retention, and bounded older context that cannot establish an in-period opportunity.
+Cover a 30-day cutoff in both folders, a conversation that moved from Focused to Archived between runs (updated by URL, not duplicated), seven-day incremental overlap, scrolling until older conversations are reached, machine-readable timestamps, displayed timestamp retention, and bounded older context that cannot establish an in-period opportunity.
 
 - [ ] **Step 5: Implement incremental conversation and history collection**
 
-Implement `collect_focused_messages()` so raw data commits transactionally, content hashes make overlap idempotent, and the successful collection watermark advances only after the collection transaction succeeds.
+Implement `collect_messages()` so raw data commits transactionally, content hashes make overlap idempotent, and the successful collection watermark advances only after the collection transaction succeeds.
 
 - [ ] **Step 6: Write and satisfy the no-durable-ID review-focus test**
 
@@ -135,15 +142,17 @@ Simulate the same message appearing in an overlapping run with edited content. A
 
 - [ ] **Step 7: Run the scraper and storage tests**
 
-Run: `uv run pytest tests/playwright/test_message_analysis_scraping.py tests/unit/test_message_analysis_storage.py -v`
+Extend `source_files()` in `tests/unit/test_no_message_writes.py` to include `message_analysis/**/*.py`, so the package can't click, type, or use write selectors outside the guard, and confirm its existing checks pass for the new files.
+
+Run: `uv run pytest tests/playwright/test_message_analysis_scraping.py tests/unit/test_message_analysis_storage.py tests/unit/test_no_message_writes.py -v`
 
 Expected: PASS.
 
 - [ ] **Step 8: Commit the collector**
 
 ```bash
-git add message_analysis/scraper.py tests/playwright
-git commit -m "feat(analysis): collect focused inbox messages incrementally
+git add message_analysis/scraper.py tests/playwright tests/unit/test_no_message_writes.py
+git commit -m "feat(analysis): collect focused and archived messages incrementally
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ```
@@ -402,7 +411,7 @@ Expected: FAIL because the CLI does not exist.
 
 - [ ] **Step 3: Implement independent login, model, and command orchestration**
 
-Reuse `playwright/.auth/state.json`, follow the repository's manual-login flow, initialize Azure/OpenAI models only for analysis stages, and keep all existing manager scripts untouched.
+Open LinkedIn with `linkedin_pages.open_linkedin` (which reuses `playwright/.auth/state.json` and the manual-login flow, holds the LinkedIn lock, and installs the write guard) only for the collection stage, and close it before analysis. Map `LinkedInBusyError` and `LoginRequiredError` to clear messages and a nonzero exit. Initialize Azure/OpenAI models only for analysis stages, and keep all existing manager scripts untouched.
 
 - [ ] **Step 4: Write failing partial-run and resume tests**
 
@@ -414,11 +423,11 @@ Simulate a collector success followed by one opportunity analysis failure. Asser
 
 - [ ] **Step 6: Document operation and privacy**
 
-Add README commands, local-path behavior, first-run 30-day scope, incremental semantics, model-provider disclosure, private-data warning, and instructions for expanding the history window only after validation.
+Add README commands, local-path behavior, first-run 30-day scope across Focused and Archived, the read-only guarantee, the advice not to run the initial import while acting in Agent Inbox (actions wait for the LinkedIn lock), incremental semantics, model-provider disclosure, private-data warning, and instructions for expanding the history window only after validation.
 
 - [ ] **Step 7: Run focused tests**
 
-Run: `uv run pytest tests/unit/test_message_analysis_storage.py tests/unit/test_message_analysis_opportunities.py tests/unit/test_message_analysis_extraction.py tests/unit/test_message_analysis_taxonomy.py tests/unit/test_message_analysis_report.py tests/unit/test_message_analyzer_cli.py tests/playwright/test_message_analysis_scraping.py -v`
+Run: `uv run pytest tests/unit/test_message_analysis_storage.py tests/unit/test_message_analysis_opportunities.py tests/unit/test_message_analysis_extraction.py tests/unit/test_message_analysis_taxonomy.py tests/unit/test_message_analysis_report.py tests/unit/test_message_analyzer_cli.py tests/playwright/test_message_analysis_scraping.py tests/unit/test_no_message_writes.py -v`
 
 Expected: PASS.
 
