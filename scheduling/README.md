@@ -4,11 +4,12 @@ Runs the LinkedIn agents unattended so Agent Inbox only shows new, still-unhandl
 
 | Agent | Schedule | What it does |
 |---|---|---|
-| `com.personal-linkedin-agent.daily-run` | Daily 06:30 | `daily_run.py --mode full --headless`: apply decisions, close stale items, propose new items, post a summary notification |
-| `com.personal-linkedin-agent.apply-run` | Every 2 hours, 07:00-21:00 | `daily_run.py --mode apply --headless`: apply and cleanup only (no LLM calls) |
-| `com.personal-linkedin-agent.langgraph-server` | At login, kept alive | `langgraph dev`, which holds review history and dedup state |
+| `com.personal-linkedin-agent.daily-run` | Daily 06:30 | `daily_run.py --headless`: recover interrupted reviews, close items handled on LinkedIn, propose new items, and post a summary |
+| `com.personal-linkedin-agent.langgraph-server` | At login, kept alive | `langgraph dev --no-reload`, which holds review history and performs explicit Agent Inbox actions immediately |
 
 launchd runs missed calendar jobs when the Mac wakes.
+
+The retired `apply-run` job is no longer installed. `uninstall.sh` still removes an older installed copy.
 
 ## Install
 
