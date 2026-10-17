@@ -7,7 +7,7 @@ LinkedIn session, and exercises the same selector strings the production code us
 from playwright.async_api import async_playwright
 from playwright.sync_api import Page
 
-from invitations_manager import INVITATION_CARD_SELECTORS, approved_invitation_decision
+from invitations_manager import INVITATION_CARD_SELECTORS
 from linkedin_actions import click_invitation_button
 from tests.async_helpers import run_async_test
 from tests.playwright.helpers import fixture_url
@@ -70,9 +70,7 @@ def test_only_human_approved_invitation_action_mutates_intended_card():
             cards = await page.query_selector_all(INVITATION_CARD_SELECTORS[0])
             assert await page.evaluate("window.__invitationActions") == []
 
-            approved = approved_invitation_decision({"thread_id": "thread-1", "values": {"decision": "accept"}})
-            assert approved is not None
-            assert await click_invitation_button(cards[0], approved.action.value) is True
+            assert await click_invitation_button(cards[0], "accept") is True
 
             assert await page.evaluate("window.__invitationActions") == ["Accept Jane Doe's invitation to connect"]
             assert await page.query_selector("button[aria-label='Ignore invitation for Weekly Newsletter']") is not None

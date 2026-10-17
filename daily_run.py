@@ -1,20 +1,22 @@
-"""Unattended orchestrator: apply human decisions, close confirmed-stale items, propose new items, post a summary.
+"""Unattended orchestrator: recover reviews, sync handled items, propose new items, and post a summary.
 
-`--mode apply` makes no LLM calls (apply + cleanup only). `--mode full` also proposes new items.
 Exit codes: 0 success, 1 health failure (e.g. a scrape returned nothing), 2 LinkedIn login needed.
-Nothing is clicked on LinkedIn without a human decision in Agent Inbox, and no message is ever sent.
+The daily run never writes to LinkedIn; live actions happen inside the review graphs after a human decision.
 """
 
 import argparse
 import asyncio
 import logging
 import sys
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import inbox_manager
 import invitations_manager
 from linkedin_guard import blocked_write_summary
+from review_graph import GRAPH_ID, MESSAGE_GRAPH_ID
+from review_queue import get_review_client, recover_stuck_reviews, retire_legacy_reviews
 from unattended import HealthCheckError, LoginRequiredError, ReviewCounts, notify
 
 logger = logging.getLogger("daily_run")
@@ -35,29 +37,50 @@ def configure_file_logging() -> None:
         logging.getLogger(name).setLevel(logging.INFO)
 
 
-def build_summary(proposed: ReviewCounts, warnings: list[str]) -> str:
+def build_summary(proposed: ReviewCounts, warnings: list[str], recovered: int = 0, retired: int = 0) -> str:
     text = f"{proposed.new} new items in Agent Inbox ({proposed.needs_judgment} need judgment)"
     if proposed.cap_hit:
         text += ", safety cap hit"
+    if recovered:
+        text += f", {recovered} interrupted action(s) brought back for review"
+    if retired:
+        text += f", {retired} old decision(s) from before live actions were retired; anything still open on LinkedIn was queued again"
     if warnings:
         text += f", {len(warnings)} warning(s): " + "; ".join(warnings)
     return text
 
 
-async def run(mode: str, headless: bool) -> int:
+async def recover_and_retire_reviews() -> tuple[int, int]:
+    client = get_review_client()
+    now = datetime.now(timezone.utc)
+    recovered = 0
+    retired = 0
+    for graph_id in (GRAPH_ID, MESSAGE_GRAPH_ID):
+        recovered += await recover_stuck_reviews(client, graph_id, now)
+        retired += await retire_legacy_reviews(client, graph_id)
+    return recovered, retired
+
+
+async def run(headless: bool) -> int:
     warnings: list[str] = []
     proposed = ReviewCounts()
     exit_code = EXIT_OK
+    recovered = 0
+    retired = 0
 
+    logger.info("=== Step: recover + retire legacy ===")
+    try:
+        recovered, retired = await recover_and_retire_reviews()
+    except Exception as error:
+        logger.exception("recover + retire legacy failed")
+        warnings.append(f"recover + retire legacy: {error!r}")
+        exit_code = EXIT_HEALTH
     steps = [
-        ("invitations apply+cleanup", lambda: invitations_manager.process_linkedin_invitations(headless=headless, apply_inbox_decisions=True, cleanup_stale=True, unattended=True)),
+        ("invitations cleanup", lambda: invitations_manager.process_linkedin_invitations(headless=headless, cleanup_stale=True, unattended=True)),
         ("messages cleanup", lambda: inbox_manager.manage_linkedin_inbox(headless=headless, unattended=True, cleanup_only=True)),
+        ("invitations propose", lambda: invitations_manager.process_linkedin_invitations(headless=headless, unattended=True)),
+        ("messages propose", lambda: inbox_manager.manage_linkedin_inbox(headless=headless, unattended=True)),
     ]
-    if mode == "full":
-        steps += [
-            ("invitations propose", lambda: invitations_manager.process_linkedin_invitations(headless=headless, unattended=True)),
-            ("messages propose", lambda: inbox_manager.manage_linkedin_inbox(headless=headless, unattended=True)),
-        ]
 
     for name, step in steps:
         logger.info("=== Step: %s ===", name)
@@ -83,18 +106,16 @@ async def run(mode: str, headless: bool) -> int:
 
     if blocked := blocked_write_summary():
         warnings.append(blocked)
-    summary = build_summary(proposed, warnings)
+    summary = build_summary(proposed, warnings, recovered, retired)
     logger.info("Summary: %s", summary)
-    if mode == "full" or warnings:
-        notify("LinkedIn agent", summary)
+    notify("LinkedIn agent", summary)
     return exit_code
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the LinkedIn agents unattended.")
-    parser.add_argument("--mode", choices=["full", "apply"], default="full", help="full: apply, cleanup, propose, summary. apply: apply and cleanup only (no LLM calls).")
     parser.add_argument("--headless", action="store_true", help="Run the browser in headless mode.")
-    parser.add_argument("--model-backend", choices=["ollama", "openai", "azure", "fallback"], default=None, help="Model backend for the full run (default: MODEL_BACKEND env var).")
+    parser.add_argument("--model-backend", choices=["ollama", "openai", "azure", "fallback"], default=None, help="Model backend for proposal ranking (default: MODEL_BACKEND env var).")
     args = parser.parse_args()
 
     configure_file_logging()
@@ -103,7 +124,7 @@ def main() -> int:
             invitations_manager.agent = invitations_manager.build_agent(args.model_backend)
         if args.model_backend != inbox_manager.MODEL_BACKEND:
             inbox_manager.model = inbox_manager.build_model(args.model_backend)
-    return asyncio.run(run(args.mode, args.headless))
+    return asyncio.run(run(args.headless))
 
 
 if __name__ == "__main__":

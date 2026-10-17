@@ -3,7 +3,6 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Literal
 
 import azure.identity.aio
 import yaml
@@ -12,7 +11,6 @@ from openai import AsyncOpenAI
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-from pydantic import BaseModel
 from pydantic_ai import Agent, NativeOutput
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.ollama import OllamaModel
@@ -22,7 +20,6 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from rich.logging import RichHandler
 
-from linkedin_actions import click_invitation_button
 from linkedin_pages import (  # noqa: F401  (unused names are re-exported for existing callers)
     INVITATION_CARD_SELECTORS,
     MAX_SCANNED_INVITATIONS,
@@ -37,7 +34,7 @@ from linkedin_pages import (  # noqa: F401  (unused names are re-exported for ex
     page_reports_no_invitations,
 )
 from review_graph import GRAPH_ID
-from review_queue import classify_review, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_pending_review, get_review_client, mark_applied, supersede_review
+from review_queue import classify_review, enqueue_review, fetch_pending_reviews, find_pending_review, get_review_client, supersede_review
 from unattended import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts
 
 # Setup logging with rich
@@ -118,12 +115,6 @@ def build_model(backend: str):
         raise ValueError(f"Unknown model backend: {backend!r}. Expected 'ollama', 'openai', 'azure', or 'fallback'.")
     logger.info("Using model backend=%s (model_name=%s)", backend, chosen_model.model_name)
     return chosen_model
-
-
-class ApprovedInvitationAction(BaseModel):
-    action: Literal[InvitationAction.ACCEPT, InvitationAction.IGNORE]
-    reason: str
-    thread_id: str
 
 
 INVITATION_DECISION_SYSTEM_PROMPT = """Decide whether to accept or ignore LinkedIn invitations based on the profile information provided.
@@ -233,24 +224,6 @@ async def get_profile_info(page: Page, profile_url: str) -> str:
         await new_page.close()
 
 
-def approved_invitation_decision(resolved_review: dict) -> ApprovedInvitationAction | None:
-    """Return a validated human decision, or fail closed for malformed review data."""
-    values = resolved_review.get("values") or {}
-    thread_id = resolved_review.get("thread_id")
-    if not isinstance(thread_id, str) or not thread_id:
-        logger.warning("Skipping invitation review without a thread ID: %r", resolved_review)
-        return None
-    try:
-        action = InvitationAction(values["decision"])
-    except (KeyError, ValueError, TypeError):
-        logger.warning("Skipping malformed invitation review: %r", values)
-        return None
-    if action not in {InvitationAction.ACCEPT, InvitationAction.IGNORE}:
-        logger.warning("Skipping non-actionable invitation review: %r", values)
-        return None
-    return ApprovedInvitationAction(action=action, reason="Approved by human via Agent Inbox", thread_id=thread_id)
-
-
 NEEDS_JUDGMENT_LABEL = "Needs your judgment"
 
 
@@ -296,51 +269,6 @@ async def close_stale_invitations(review_client, page: Page) -> int:
             logger.info("Closed stale invitation review %s as superseded.", key)
             closed += 1
     return closed
-
-
-async def apply_resolved_invitations(page: Page, review_client, human_decisions: dict[str, dict], num_to_process: int) -> list[Invitation]:
-    """Click the Accept/Ignore a human chose in Agent Inbox for visible invitations."""
-    results: list[Invitation] = []
-    processed_profiles: set[str] = set()
-    consecutive_no_new_scrolls = 0
-    max_no_new_scrolls = 5  # fail-safe to avoid infinite loop
-
-    while len(results) < num_to_process:
-        # DOM changes remove accepted/ignored cards, so always re-read the visible set
-        invitation_cards = await get_invitation_cards(page)
-        if not invitation_cards:
-            logger.info("No invitation cards currently visible.")
-            break
-        new_card_seen = False
-        for card in invitation_cards:
-            if len(results) >= num_to_process:
-                break
-            invitation = await get_invitation_info(card)
-            if not invitation or invitation.profile in processed_profiles:
-                continue
-            processed_profiles.add(invitation.profile)
-            new_card_seen = True
-            resolved_review = human_decisions.get(invitation.profile)
-            if not resolved_review:
-                continue
-            human_decision = approved_invitation_decision(resolved_review)
-            if human_decision and await click_invitation_button(card, human_decision.action.value):
-                invitation.decision = InvitationDecision(action=human_decision.action, reason=human_decision.reason)
-                await mark_applied(review_client, human_decision.thread_id)
-                logger.info(f"Applied human-approved decision for {invitation.name}: {human_decision.action.value}")
-                results.append(invitation)
-                await asyncio.sleep(1)
-        if len(results) >= num_to_process:
-            break
-        if new_card_seen:
-            consecutive_no_new_scrolls = 0
-            continue
-        consecutive_no_new_scrolls += 1
-        await page.evaluate("window.scrollBy(0, window.innerHeight * 0.9)")
-        await asyncio.sleep(2)
-        if consecutive_no_new_scrolls >= max_no_new_scrolls:
-            break
-    return results
 
 
 async def propose_new_invitations(page: Page, review_client, num_to_process: int, record_eval_cases: bool, unattended: bool) -> tuple[list[Invitation], ReviewCounts]:
@@ -427,17 +355,13 @@ async def propose_new_invitations(page: Page, review_client, num_to_process: int
     return results, counts
 
 
-async def process_linkedin_invitations(num_to_process: int = 100, record_eval_cases: bool = False, headless: bool = False, apply_inbox_decisions: bool = False, cleanup_stale: bool = False, unattended: bool = False) -> ReviewCounts:
-    """Propose new invitations (default), or apply human decisions and/or close stale items.
+async def process_linkedin_invitations(num_to_process: int = 100, record_eval_cases: bool = False, headless: bool = False, cleanup_stale: bool = False, unattended: bool = False) -> ReviewCounts:
+    """Propose new invitations (default), or close stale items.
 
     `num_to_process` is a safety cap on NEW items; already-known invitations never count toward it.
     """
     logger.info("Starting LinkedIn invitation processing...")
     review_client = get_review_client()
-    human_decisions: dict[str, dict] = {}
-    if apply_inbox_decisions:
-        human_decisions = await fetch_resolved_reviews(review_client, GRAPH_ID)
-        logger.info("Found %d resolved Agent Inbox review(s).", len(human_decisions))
 
     counts = ReviewCounts()
     async with linkedin_session(headless, unattended) as (_context, page):
@@ -449,16 +373,8 @@ async def process_linkedin_invitations(num_to_process: int = 100, record_eval_ca
             logger.info("Found %d newsletter invitation(s); left pending because no human-approved action exists.", newsletter_invitation_count)
         await page.wait_for_selector("main#workspace, main, div[role='main']")
 
-        if apply_inbox_decisions or cleanup_stale:
-            if apply_inbox_decisions:
-                applied = await apply_resolved_invitations(page, review_client, human_decisions, num_to_process)
-                counts.applied = len(applied)
-                logger.info("Applied %d human-approved invitation decision(s).", len(applied))
-            if cleanup_stale:
-                if apply_inbox_decisions:
-                    await page.goto("https://www.linkedin.com/mynetwork/invitation-manager/")
-                    await page.wait_for_load_state("load")
-                counts.superseded = await close_stale_invitations(review_client, page)
+        if cleanup_stale:
+            counts.superseded = await close_stale_invitations(review_client, page)
             return counts
 
         results, counts = await propose_new_invitations(page, review_client, num_to_process, record_eval_cases, unattended)
@@ -479,7 +395,6 @@ if __name__ == "__main__":
     parser.add_argument("--record-eval-cases", action="store_true", help="Record eval cases to YAML file.")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode.")
     parser.add_argument("--send-to-inbox", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--apply-inbox-decisions", action="store_true", help="Apply accept/ignore decisions a human made in Agent Inbox.")
     parser.add_argument("--cleanup-stale", action="store_true", help="Close pending reviews for invitations no longer on LinkedIn (only after a full, non-empty scan).")
     parser.add_argument(
         "--model-backend",
@@ -492,4 +407,4 @@ if __name__ == "__main__":
     if args.model_backend and args.model_backend != MODEL_BACKEND:
         agent = build_agent(args.model_backend)
 
-    asyncio.run(process_linkedin_invitations(args.num_to_process, record_eval_cases=args.record_eval_cases, headless=args.headless, apply_inbox_decisions=args.apply_inbox_decisions, cleanup_stale=args.cleanup_stale))
+    asyncio.run(process_linkedin_invitations(args.num_to_process, record_eval_cases=args.record_eval_cases, headless=args.headless, cleanup_stale=args.cleanup_stale))

@@ -18,6 +18,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from rich.logging import RichHandler
 
+from linkedin_actions import conversation_is_archived
 from linkedin_guard import safe_click
 from linkedin_pages import (  # noqa: F401  (unused names are re-exported for existing callers)
     UNKNOWN_AUTHORS,
@@ -29,7 +30,7 @@ from linkedin_pages import (  # noqa: F401  (unused names are re-exported for ex
     open_linkedin,
 )
 from review_graph import MESSAGE_GRAPH_ID
-from review_queue import classify_review, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_pending_review, get_review_client, mark_applied, supersede_review
+from review_queue import classify_review, enqueue_review, fetch_pending_reviews, find_pending_review, get_review_client, supersede_review
 from unattended import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts
 
 # Setup logging with rich
@@ -281,55 +282,11 @@ Consider the flow of conversation and whether the last message seems to be waiti
     return ranked_messages
 
 
-async def apply_message_reviews(context, review_client) -> int:
-    """Open conversations the human approved in Agent Inbox and print the approved reply. Never sends anything."""
-    resolved = await fetch_resolved_reviews(review_client, MESSAGE_GRAPH_ID)
-    logger.info("Found %d resolved message review(s).", len(resolved))
-    applied = 0
-    for resolved_review in resolved.values():
-        values = resolved_review.get("values") or {}
-        thread_id = resolved_review.get("thread_id")
-        if not isinstance(thread_id, str) or not thread_id:
-            logger.warning("Skipping message review without a thread ID: %r", resolved_review)
-            continue
-        action = values.get("action")
-        if action == "reply":
-            reply = values.get("reply")
-            conversation_url = values.get("conversation_url")
-            # An empty reply is valid (an unscored conversation has no suggestion); it just opens the thread.
-            if not isinstance(reply, str) or not is_linkedin_conversation_url(conversation_url):
-                logger.warning("Skipping malformed approved message reply: %r", values)
-                continue
-            logger.info(f"\nApproved reply for {values.get('sender_name', 'conversation')}:\n{reply or '(no reply drafted)'}\n{conversation_url}")
-            reply_page = await context.new_page()
-            await reply_page.goto(conversation_url)
-        elif action == "superseded":
-            continue
-        elif action != "dismiss":
-            logger.warning("Skipping malformed message review: %r", values)
-            continue
-        await mark_applied(review_client, thread_id)
-        applied += 1
-    return applied
-
-
-async def finalize_dismissed_messages(review_client) -> int:
-    """Mark dismissed message reviews applied. Needs no browser; approved replies stay for a manual --apply-inbox-decisions."""
-    resolved = await fetch_resolved_reviews(review_client, MESSAGE_GRAPH_ID)
-    finalized = 0
-    for resolved_review in resolved.values():
-        thread_id = resolved_review.get("thread_id")
-        if (resolved_review.get("values") or {}).get("action") == "dismiss" and isinstance(thread_id, str) and thread_id:
-            await mark_applied(review_client, thread_id)
-            finalized += 1
-    return finalized
-
-
-async def close_self_replied_messages(page: Page, review_client, logged_in_user: str) -> int:
-    """Supersede pending message reviews whose conversation's latest message is from the user.
+async def close_handled_messages(page: Page, review_client, logged_in_user: str) -> int:
+    """Supersede pending reviews for conversations the user replied to or archived.
 
     Only the pending items' own conversations are opened. Anything ambiguous (unknown author, no messages,
-    unknown user name) keeps the item.
+    unknown user name, unknown archive state) keeps the item.
     """
     pending = await fetch_pending_reviews(review_client, MESSAGE_GRAPH_ID)
     if not pending:
@@ -344,11 +301,17 @@ async def close_self_replied_messages(page: Page, review_client, logged_in_user:
             await page.wait_for_load_state("load")
             await page.wait_for_timeout(2000)
             messages = await extract_conversation_messages(page, "conversation")
+            archived = await conversation_is_archived(page)
         except Exception as e:
             logger.warning("Could not check %s; keeping its review: %s", url, e)
             continue
-        if latest_message_is_from_user(messages, logged_in_user) and await supersede_review(review_client, thread_id, "You replied on LinkedIn."):
-            logger.info("Closed %s as superseded (you replied).", url)
+        reason = None
+        if latest_message_is_from_user(messages, logged_in_user):
+            reason = "You replied on LinkedIn."
+        elif archived is True:
+            reason = "You archived this conversation on LinkedIn."
+        if reason and await supersede_review(review_client, thread_id, reason):
+            logger.info("Closed %s as superseded: %s", url, reason)
             closed += 1
     return closed
 
@@ -399,34 +362,24 @@ def linkedin_session(headless: bool, unattended: bool):
 
 async def manage_linkedin_inbox(
     num_messages: int = 100,
-    apply_inbox_decisions: bool = False,
     min_urgency: int = 4,
     headless: bool = False,
     unattended: bool = False,
     cleanup_only: bool = False,
 ) -> ReviewCounts:
-    """Queue conversations needing a reply, apply approved reviews, or (cleanup_only) finalize/close handled ones without any LLM call."""
+    """Queue conversations needing a reply, or close handled ones without any LLM call."""
     logger.info("Starting LinkedIn inbox management...")
     review_client = get_review_client()
 
     if cleanup_only:
         counts = ReviewCounts()
-        finalized = await finalize_dismissed_messages(review_client)
-        logger.info("Finalized %d dismissed message review(s).", finalized)
         if await fetch_pending_reviews(review_client, MESSAGE_GRAPH_ID):
             async with linkedin_session(headless, unattended) as (_context, page):
                 logged_in_user = await get_logged_in_user_name(page)
-                counts.superseded = await close_self_replied_messages(page, review_client, logged_in_user)
-        counts.applied = finalized
+                counts.superseded = await close_handled_messages(page, review_client, logged_in_user)
         return counts
 
-    async with linkedin_session(headless, unattended) as (context, page):
-        if apply_inbox_decisions:
-            applied = await apply_message_reviews(context, review_client)
-            if not (headless or unattended):
-                await asyncio.to_thread(input, "Press Enter to close the browser...")
-            return ReviewCounts(applied=applied)
-
+    async with linkedin_session(headless, unattended) as (_context, page):
         logged_in_user = await get_logged_in_user_name(page)
         logger.info(f"Managing inbox for user: {logged_in_user}")
         message_ranking_agent = create_message_ranking_agent(logged_in_user)
@@ -477,7 +430,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Manage LinkedIn inbox messages.")
     parser.add_argument("--num-messages", type=int, default=100, help="Safety cap on conversations to scan per run (default: 100). Scanning stops earlier once it reaches conversations already handled.")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode.")
-    parser.add_argument("--cleanup-only", action="store_true", help="Finalize dismissed reviews and close ones you already answered on LinkedIn; makes no LLM calls.")
+    parser.add_argument("--cleanup-only", action="store_true", help="Close reviews for conversations you replied to or archived on LinkedIn; makes no LLM calls.")
     parser.add_argument(
         "--model-backend",
         choices=["ollama", "openai", "azure", "fallback"],
@@ -485,11 +438,10 @@ if __name__ == "__main__":
         help=f"Model backend to use (default: MODEL_BACKEND env var, currently {MODEL_BACKEND!r}).",
     )
     parser.add_argument("--send-to-inbox", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--apply-inbox-decisions", action="store_true", help="Open conversations a human approved in Agent Inbox and print the approved reply (nothing is sent).")
     parser.add_argument("--min-urgency", type=int, default=4, help="Conversations scoring below this get a 'Low urgency' label in Agent Inbox; they are still queued (default: 4).")
     args = parser.parse_args()
 
     if args.model_backend and args.model_backend != MODEL_BACKEND:
         model = build_model(args.model_backend)
 
-    asyncio.run(manage_linkedin_inbox(args.num_messages, apply_inbox_decisions=args.apply_inbox_decisions, min_urgency=args.min_urgency, headless=args.headless, cleanup_only=args.cleanup_only))
+    asyncio.run(manage_linkedin_inbox(args.num_messages, min_urgency=args.min_urgency, headless=args.headless, cleanup_only=args.cleanup_only))
