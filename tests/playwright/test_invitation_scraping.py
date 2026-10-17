@@ -4,9 +4,11 @@ Loads a static fixture (tests/playwright/fixtures/invitation_manager.html) inste
 LinkedIn session, and exercises the same selector strings the production code uses.
 """
 
+from playwright.async_api import async_playwright
 from playwright.sync_api import Page
 
-from invitations_manager import INVITATION_CARD_SELECTORS
+from invitations_manager import INVITATION_CARD_SELECTORS, approved_invitation_decision, execute_approved_action
+from tests.async_helpers import run_async_test
 from tests.playwright.helpers import fixture_url
 
 
@@ -43,3 +45,32 @@ def test_newsletter_ignore_button_is_found_by_selector(page: Page):
 
     assert ignore_button is not None
     assert ignore_button.get_attribute("aria-label") == "Ignore invitation for Weekly Newsletter"
+
+
+def test_only_human_approved_invitation_action_mutates_intended_card():
+    async def scenario():
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch()
+            page = await browser.new_page()
+            await page.goto(fixture_url("invitation_manager.html"))
+            await page.evaluate(
+                """
+                window.__invitationActions = [];
+                document.querySelectorAll("button").forEach((button) => {
+                  button.addEventListener("click", () => window.__invitationActions.push(button.getAttribute("aria-label")));
+                });
+                """
+            )
+
+            cards = await page.query_selector_all(INVITATION_CARD_SELECTORS[0])
+            assert await page.evaluate("window.__invitationActions") == []
+
+            approved = approved_invitation_decision({"thread_id": "thread-1", "values": {"decision": "accept"}})
+            assert approved is not None
+            assert await execute_approved_action(cards[0], approved) is True
+
+            assert await page.evaluate("window.__invitationActions") == ["Accept Jane Doe's invitation to connect"]
+            assert await page.query_selector("button[aria-label='Ignore invitation for Weekly Newsletter']") is not None
+            await browser.close()
+
+    run_async_test(scenario)

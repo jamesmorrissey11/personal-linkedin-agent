@@ -1,8 +1,28 @@
+diff --git a/package.json b/package.json
+index f7d22ca..331303a 100644
+--- a/package.json
++++ b/package.json
+@@ -9,7 +9,9 @@
+     "lint": "eslint src",
+     "lint:fix": "eslint src --fix",
+     "format": "prettier --config .prettierrc --write \"src\"",
+-    "format:check": "prettier --config .prettierrc --check \"src\""
++    "format:check": "prettier --config .prettierrc --check \"src\"",
++    "test": "tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
++    "typecheck": "tsc --noEmit -p ."
+   },
+   "dependencies": {
+     "@assistant-ui/react": "^0.15.18",
 diff --git a/src/components/agent-inbox/components/add-agent-inbox-dialog.tsx b/src/components/agent-inbox/components/add-agent-inbox-dialog.tsx
-index 259b861..4b49977 100644
+index 259b861..1cb067a 100644
 --- a/src/components/agent-inbox/components/add-agent-inbox-dialog.tsx
 +++ b/src/components/agent-inbox/components/add-agent-inbox-dialog.tsx
-@@ -20,7 +20,11 @@ import {
+@@ -15,16 +15,20 @@ import { useThreadsContext } from "../contexts/ThreadContext";
+ import { useToast } from "@/hooks/use-toast";
+ import { useQueryParams } from "../hooks/use-query-params";
+ import {
+-  AGENT_INBOX_GITHUB_README_URL,
+   NO_INBOXES_FOUND_PARAM,
    LANGCHAIN_API_KEY_LOCAL_STORAGE_KEY,
  } from "../constants";
  import { PasswordInput } from "@/components/ui/password-input";
@@ -15,6 +35,11 @@ index 259b861..4b49977 100644
  import { useLocalStorage } from "../hooks/use-local-storage";
  import { LoaderCircle } from "lucide-react";
  import { logger } from "../utils/logger";
+ import { AgentInbox } from "../types";
++import { WelcomeInboxDescription } from "./welcome-inbox-description";
+ 
+ export function AddAgentInboxDialog({
+   hideTrigger,
 @@ -46,7 +50,7 @@ export function AddAgentInboxDialog({
    const { getItem } = useLocalStorage();
    const [open, setOpen] = React.useState(false);
@@ -52,29 +77,28 @@ index 259b861..4b49977 100644
    const showLangChainApiKeyField =
      (noInboxesFoundParam === "true" || isDeployedGraph) &&
      langchainApiKey !== undefined &&
-@@ -193,8 +209,10 @@ export function AddAgentInboxDialog({
+@@ -193,19 +209,7 @@ export function AddAgentInboxDialog({
            <DialogHeader>
              <DialogTitle>Welcome to the Agent Inbox!</DialogTitle>
              <DialogDescription>
 -              <p>To get started, please add an inbox below.</p>
 -              <p>
-+              <span className="block">
-+                To get started, please add an inbox below.
-+              </span>
-+              <span className="block">
-                 Not sure where to start? Check out our docs
-                 <a
-                   href={AGENT_INBOX_GITHUB_README_URL}
-@@ -205,7 +223,7 @@ export function AddAgentInboxDialog({
-                   here
-                 </a>
-                 .
+-                Not sure where to start? Check out our docs
+-                <a
+-                  href={AGENT_INBOX_GITHUB_README_URL}
+-                  target="_blank"
+-                  rel="noreferrer"
+-                  className="text-brand-500 hover:underline ml-1"
+-                >
+-                  here
+-                </a>
+-                .
 -              </p>
-+              </span>
++              <WelcomeInboxDescription />
              </DialogDescription>
            </DialogHeader>
          ) : (
-@@ -245,10 +263,10 @@ export function AddAgentInboxDialog({
+@@ -245,10 +249,10 @@ export function AddAgentInboxDialog({
              </p>
              <Input
                id="deployment-url"
@@ -126,6 +150,52 @@ index 3768878..9670b47 100644
            </div>
          );
        })}
+diff --git a/src/components/agent-inbox/components/welcome-inbox-description.test.tsx b/src/components/agent-inbox/components/welcome-inbox-description.test.tsx
+new file mode 100644
+index 0000000..33d923c
+--- /dev/null
++++ b/src/components/agent-inbox/components/welcome-inbox-description.test.tsx
+@@ -0,0 +1,13 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import { renderToStaticMarkup } from "react-dom/server";
++import { WelcomeInboxDescription } from "./welcome-inbox-description";
++
++test("welcome description uses phrasing content that is valid inside DialogDescription", () => {
++  const html = renderToStaticMarkup(<WelcomeInboxDescription />);
++
++  assert.match(html, /<span class="block">/);
++  assert.match(html, /To get started/);
++  assert.match(html, /Check out our docs/);
++  assert.doesNotMatch(html, /<p/);
++});
+diff --git a/src/components/agent-inbox/components/welcome-inbox-description.tsx b/src/components/agent-inbox/components/welcome-inbox-description.tsx
+new file mode 100644
+index 0000000..0322217
+--- /dev/null
++++ b/src/components/agent-inbox/components/welcome-inbox-description.tsx
+@@ -0,0 +1,21 @@
++import { AGENT_INBOX_GITHUB_README_URL } from "../constants";
++
++export function WelcomeInboxDescription() {
++  return (
++    <>
++      <span className="block">To get started, please add an inbox below.</span>
++      <span className="block">
++        Not sure where to start? Check out our docs
++        <a
++          href={AGENT_INBOX_GITHUB_README_URL}
++          target="_blank"
++          rel="noreferrer"
++          className="text-brand-500 hover:underline ml-1"
++        >
++          here
++        </a>
++        .
++      </span>
++    </>
++  );
++}
 diff --git a/src/components/agent-inbox/contexts/ThreadContext.tsx b/src/components/agent-inbox/contexts/ThreadContext.tsx
 index 274e783..3742d72 100644
 --- a/src/components/agent-inbox/contexts/ThreadContext.tsx
@@ -152,6 +222,89 @@ index 274e783..3742d72 100644
    if (!deploymentUrl) {
      toast({
        title: "Error",
+diff --git a/src/components/agent-inbox/utils.test.ts b/src/components/agent-inbox/utils.test.ts
+new file mode 100644
+index 0000000..507f27f
+--- /dev/null
++++ b/src/components/agent-inbox/utils.test.ts
+@@ -0,0 +1,77 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import type { MutableRefObject } from "react";
++import type { HumanInterrupt } from "./types";
++import { createDefaultHumanResponse, normalizeDeploymentUrl } from "./utils";
++
++test("normalizes local deployment URLs without a scheme", () => {
++  assert.equal(
++    normalizeDeploymentUrl("localhost:2024"),
++    "http://localhost:2024"
++  );
++});
++
++test("preserves valid schemes and removes surrounding whitespace and trailing slashes", () => {
++  assert.equal(
++    normalizeDeploymentUrl(" https://example.us.langgraph.app/// "),
++    "https://example.us.langgraph.app"
++  );
++});
++
++test("returns an empty value for blank input", () => {
++  assert.equal(normalizeDeploymentUrl("   "), "");
++});
++
++test("invitation interrupts expose accept and ignore controls", () => {
++  const interrupt: HumanInterrupt = {
++    action_request: { action: "Accept invitation?", args: { name: "Ada" } },
++    config: {
++      allow_accept: true,
++      allow_ignore: true,
++      allow_edit: false,
++      allow_respond: false,
++    },
++  };
++  const initialValues = {
++    current: {},
++  } as MutableRefObject<Record<string, string>>;
++
++  const result = createDefaultHumanResponse([interrupt], initialValues);
++
++  assert.equal(result.defaultSubmitType, "accept");
++  assert.equal(result.hasAccept, true);
++  assert.deepEqual(
++    result.responses.map((response) => response.type),
++    ["ignore", "accept"]
++  );
++});
++
++test("message interrupts expose edit, accept, and ignore controls", () => {
++  const interrupt: HumanInterrupt = {
++    action_request: {
++      action: "Reply?",
++      args: { suggested_reply: "Approved draft" },
++    },
++    config: {
++      allow_accept: true,
++      allow_ignore: true,
++      allow_edit: true,
++      allow_respond: false,
++    },
++  };
++  const initialValues = {
++    current: {},
++  } as MutableRefObject<Record<string, string>>;
++
++  const result = createDefaultHumanResponse([interrupt], initialValues);
++
++  assert.equal(result.defaultSubmitType, "accept");
++  assert.equal(result.hasAccept, true);
++  assert.deepEqual(
++    result.responses.map((response) => response.type),
++    ["edit", "ignore", "accept"]
++  );
++  assert.deepEqual(initialValues.current, {
++    suggested_reply: "Approved draft",
++  });
++});
 diff --git a/src/components/agent-inbox/utils.ts b/src/components/agent-inbox/utils.ts
 index afc4cb7..eefc182 100644
 --- a/src/components/agent-inbox/utils.ts
@@ -175,6 +328,27 @@ index afc4cb7..eefc182 100644
  /**
   * Determines if a URL is a deployed (cloud) URL.
   */
+diff --git a/src/components/ui/markdown-text.test.tsx b/src/components/ui/markdown-text.test.tsx
+new file mode 100644
+index 0000000..c9336a7
+--- /dev/null
++++ b/src/components/ui/markdown-text.test.tsx
+@@ -0,0 +1,15 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import { renderToStaticMarkup } from "react-dom/server";
++import { MarkdownText } from "./markdown-text";
++
++test("applies className to a wrapper instead of react-markdown", () => {
++  const html = renderToStaticMarkup(
++    <MarkdownText className="review-description">
++      {"Review **this action**"}
++    </MarkdownText>
++  );
++
++  assert.match(html, /^<div class="review-description">/);
++  assert.match(html, /<strong>this action<\/strong>/);
++});
 diff --git a/src/components/ui/markdown-text.tsx b/src/components/ui/markdown-text.tsx
 index 903ec73..0f2e280 100644
 --- a/src/components/ui/markdown-text.tsx

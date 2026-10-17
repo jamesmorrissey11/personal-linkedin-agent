@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import logging
 import os
+from urllib.parse import urlparse
 
 import azure.identity
 from dotenv import load_dotenv
@@ -118,6 +119,13 @@ class InboxMessage(BaseModel):
     last_three_messages: list[ConversationMessage]
     conversation_url: str
     ranking: MessageRanking | None = None
+
+
+def is_linkedin_conversation_url(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme == "https" and parsed.hostname in {"linkedin.com", "www.linkedin.com"} and parsed.path.startswith("/messaging/")
 
 
 async def get_logged_in_user_name(page: Page) -> str:
@@ -321,20 +329,35 @@ async def apply_message_reviews(context, review_client) -> int:
     """Open conversations the human approved in Agent Inbox and print the approved reply. Never sends anything."""
     resolved = await fetch_resolved_reviews(review_client, MESSAGE_GRAPH_ID)
     logger.info("Found %d resolved message review(s).", len(resolved))
+    applied = 0
     for resolved_review in resolved.values():
-        values = resolved_review["values"]
-        if values.get("action") == "reply":
+        values = resolved_review.get("values") or {}
+        thread_id = resolved_review.get("thread_id")
+        if not isinstance(thread_id, str) or not thread_id:
+            logger.warning("Skipping message review without a thread ID: %r", resolved_review)
+            continue
+        action = values.get("action")
+        if action == "reply":
+            reply = values.get("reply")
+            conversation_url = values.get("conversation_url")
+            if not isinstance(reply, str) or not reply.strip() or not is_linkedin_conversation_url(conversation_url):
+                logger.warning("Skipping malformed approved message reply: %r", values)
+                continue
             logger.info(f"\nApproved reply for {values.get('sender_name', 'conversation')}:\n{values.get('reply', '')}\n{values.get('conversation_url', '')}")
             reply_page = await context.new_page()
-            await reply_page.goto(values["conversation_url"])
-        await mark_applied(review_client, resolved_review["thread_id"])
-    return len(resolved)
+            await reply_page.goto(conversation_url)
+        elif action != "dismiss":
+            logger.warning("Skipping malformed message review: %r", values)
+            continue
+        await mark_applied(review_client, thread_id)
+        applied += 1
+    return applied
 
 
 async def send_messages_to_inbox(review_client, messages: list[InboxMessage], min_urgency: int) -> int:
     sent = 0
     for msg in messages:
-        if not msg.ranking or msg.ranking.urgency_score < min_urgency or not msg.conversation_url:
+        if not msg.ranking or msg.ranking.urgency_score < min_urgency or not msg.conversation_url or not msg.ranking.suggested_reply.strip():
             continue
         latest = msg.last_three_messages[-1].content if msg.last_three_messages else ""
         # Key on the latest message so a new message in the same conversation is queued again.
@@ -347,18 +370,15 @@ async def send_messages_to_inbox(review_client, messages: list[InboxMessage], mi
             "reason": msg.ranking.reason,
             "suggested_reply": msg.ranking.suggested_reply,
         }
-        try:
-            if await enqueue_review(review_client, MESSAGE_GRAPH_ID, key, input_data):
-                sent += 1
-        except Exception as e:
-            logger.warning(f"Could not send {msg.sender_name} to Agent Inbox: {e!r}")
+        if await enqueue_review(review_client, MESSAGE_GRAPH_ID, key, input_data):
+            sent += 1
     return sent
 
 
-async def manage_linkedin_inbox(num_messages: int = 20, send_to_inbox: bool = False, apply_inbox_decisions: bool = False, min_urgency: int = 4) -> list[InboxMessage]:
+async def manage_linkedin_inbox(num_messages: int = 20, apply_inbox_decisions: bool = False, min_urgency: int = 4) -> list[InboxMessage]:
     """Main function to manage LinkedIn inbox and rank top messages requiring replies."""
     logger.info("Starting LinkedIn inbox management...")
-    review_client = get_review_client() if (send_to_inbox or apply_inbox_decisions) else None
+    review_client = get_review_client()
     # Set up the storage state for Playwright
     os.makedirs("playwright/.auth", exist_ok=True)
     if not os.path.exists("playwright/.auth/state.json"):
@@ -400,9 +420,8 @@ async def manage_linkedin_inbox(num_messages: int = 20, send_to_inbox: bool = Fa
         # Rank messages for reply priority
         ranked_messages = await rank_messages_for_reply(messages, message_ranking_agent)
 
-        if send_to_inbox:
-            sent = await send_messages_to_inbox(review_client, ranked_messages, min_urgency)
-            logger.info(f"Sent {sent} conversation(s) with urgency >= {min_urgency} to Agent Inbox.")
+        sent = await send_messages_to_inbox(review_client, ranked_messages, min_urgency)
+        logger.info(f"Sent {sent} conversation(s) with urgency >= {min_urgency} to Agent Inbox.")
 
         # Generate report
         logger.info("\n=== LinkedIn Inbox Management Report ===")
@@ -454,7 +473,7 @@ if __name__ == "__main__":
         default=None,
         help=f"Model backend to use (default: MODEL_BACKEND env var, currently {MODEL_BACKEND!r}).",
     )
-    parser.add_argument("--send-to-inbox", action="store_true", help="Send conversations at or above --min-urgency to Agent Inbox for human review (requires `langgraph dev`).")
+    parser.add_argument("--send-to-inbox", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--apply-inbox-decisions", action="store_true", help="Open conversations a human approved in Agent Inbox and print the approved reply (nothing is sent).")
     parser.add_argument("--min-urgency", type=int, default=4, help="Minimum urgency score (1-10) to send to Agent Inbox (default: 4).")
     args = parser.parse_args()
@@ -462,4 +481,4 @@ if __name__ == "__main__":
     if args.model_backend and args.model_backend != MODEL_BACKEND:
         model = build_model(args.model_backend)
 
-    asyncio.run(manage_linkedin_inbox(args.num_messages, send_to_inbox=args.send_to_inbox, apply_inbox_decisions=args.apply_inbox_decisions, min_urgency=args.min_urgency))
+    asyncio.run(manage_linkedin_inbox(args.num_messages, apply_inbox_decisions=args.apply_inbox_decisions, min_urgency=args.min_urgency))

@@ -4,6 +4,7 @@ import logging
 import os
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 from urllib.parse import unquote, urlparse, urlunparse
 
 import azure.identity.aio
@@ -33,6 +34,7 @@ logger.setLevel(logging.INFO)
 
 PROFILE_NAVIGATION_TIMEOUT_MS = 45000
 PROFILE_CONTENT_TIMEOUT_MS = 15000
+NEWSLETTER_IGNORE_SELECTOR = "button[aria-label^='Ignore invitation for ']"
 INVITATION_CARD_SELECTORS = [
     "div[role='listitem']:has(button[aria-label^='Ignore an invitation to connect from ']):has(a[href*='/in/'])",
     "main div[componentkey^='auto-component-']:has(button[aria-label*='Accept'])",
@@ -107,6 +109,12 @@ class InvitationAction(Enum):
 class InvitationDecision(BaseModel):
     action: InvitationAction
     reason: str
+
+
+class ApprovedInvitationAction(BaseModel):
+    action: Literal[InvitationAction.ACCEPT, InvitationAction.IGNORE]
+    reason: str
+    thread_id: str
 
 
 class Invitation(BaseModel):
@@ -299,44 +307,66 @@ async def get_profile_info(page: Page, profile_url: str) -> str:
         await new_page.close()
 
 
-async def execute_action(page: Page, card: ElementHandle, decision: InvitationDecision) -> InvitationDecision:
+def approved_invitation_decision(resolved_review: dict) -> ApprovedInvitationAction | None:
+    """Return a validated human decision, or fail closed for malformed review data."""
+    values = resolved_review.get("values") or {}
+    thread_id = resolved_review.get("thread_id")
+    if not isinstance(thread_id, str) or not thread_id:
+        logger.warning("Skipping invitation review without a thread ID: %r", resolved_review)
+        return None
+    try:
+        action = InvitationAction(values["decision"])
+    except (KeyError, ValueError, TypeError):
+        logger.warning("Skipping malformed invitation review: %r", values)
+        return None
+    if action not in {InvitationAction.ACCEPT, InvitationAction.IGNORE}:
+        logger.warning("Skipping non-actionable invitation review: %r", values)
+        return None
+    return ApprovedInvitationAction(action=action, reason="Approved by human via Agent Inbox", thread_id=thread_id)
+
+
+async def execute_approved_action(card: ElementHandle, decision: ApprovedInvitationAction) -> bool:
+    """Execute a validated human-approved invitation action."""
     if decision.action == InvitationAction.ACCEPT:
         accept_button = await card.query_selector("button[aria-label*='Accept']")
         if accept_button:
             await accept_button.click()
+            return True
         else:
             logger.warning("Accept button not found on the card.")
-            decision.action = InvitationAction.UNDECIDED
     elif decision.action == InvitationAction.IGNORE:
         ignore_button = await card.query_selector("button[aria-label*='Ignore']")
         if ignore_button:
             await ignore_button.click()
+            return True
         else:
             logger.warning("Ignore button not found on the card.")
-            decision.action = InvitationAction.UNDECIDED
-    return decision
+    return False
 
 
-async def ignore_newsletter_invitations(page: Page) -> int:
-    ignored_count = 0
-    selector = "button[aria-label^='Ignore invitation for ']"
+async def queue_invitation_proposal(review_client, invitation: Invitation, decision: InvitationDecision) -> bool:
+    """Queue an actionable agent proposal; never mutate LinkedIn."""
+    if decision.action not in {InvitationAction.ACCEPT, InvitationAction.IGNORE}:
+        return False
+    return await enqueue_review(
+        review_client,
+        GRAPH_ID,
+        invitation.profile,
+        {
+            "name": invitation.name,
+            "profile": invitation.profile,
+            "job_title": invitation.job_title,
+            "reason": f"Agent proposes **{decision.action.value}**.\n\n{decision.reason}",
+        },
+    )
 
-    while ignore_button := await page.query_selector(selector):
-        label = await ignore_button.get_attribute("aria-label")
-        await ignore_button.click()
-        ignored_count += 1
-        logger.info("Ignored newsletter invitation: %s", label)
-        await asyncio.sleep(1)
 
-    return ignored_count
-
-
-async def process_linkedin_invitations(num_to_process: int, record_eval_cases: bool = False, headless: bool = False, send_to_inbox: bool = False, apply_inbox_decisions: bool = False):
+async def process_linkedin_invitations(num_to_process: int, record_eval_cases: bool = False, headless: bool = False, apply_inbox_decisions: bool = False):
     logger.info("Starting LinkedIn invitation processing...")
     results = []
     processed_count = 0
 
-    review_client = get_review_client() if (send_to_inbox or apply_inbox_decisions) else None
+    review_client = get_review_client()
     human_decisions: dict[str, dict] = {}
     if apply_inbox_decisions:
         human_decisions = await fetch_resolved_reviews(review_client, GRAPH_ID)
@@ -374,7 +404,12 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
         # Go to invitation manager
         await page.goto("https://www.linkedin.com/mynetwork/invitation-manager/")
         await page.wait_for_load_state("load")
-        ignored_newsletter_count = await ignore_newsletter_invitations(page)
+        newsletter_invitation_count = len(await page.query_selector_all(NEWSLETTER_IGNORE_SELECTOR))
+        if newsletter_invitation_count:
+            logger.info(
+                "Found %d newsletter invitation(s); left pending because no human-approved action exists.",
+                newsletter_invitation_count,
+            )
 
         async def get_invitation_cards() -> list[ElementHandle]:
             for selector in INVITATION_CARD_SELECTORS:
@@ -416,17 +451,19 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
                 if invitation.profile in processed_profiles:
                     continue
 
-                if invitation.profile in human_decisions:
-                    human_decision = InvitationDecision(action=InvitationAction(human_decisions[invitation.profile]["values"]["decision"]), reason="Resolved by human via Agent Inbox")
-                    invitation.decision = await execute_action(page, card, human_decision)
-                    if invitation.decision.action != InvitationAction.UNDECIDED:
-                        await mark_applied(review_client, human_decisions[invitation.profile]["thread_id"])
-                    logger.info(f"Applied Agent Inbox decision for {invitation.name}: {human_decision.action}")
-                    results.append(invitation)
+                if apply_inbox_decisions:
+                    resolved_review = human_decisions.get(invitation.profile)
+                    if resolved_review:
+                        human_decision = approved_invitation_decision(resolved_review)
+                        if human_decision and await execute_approved_action(card, human_decision):
+                            invitation.decision = InvitationDecision(action=human_decision.action, reason=human_decision.reason)
+                            await mark_applied(review_client, human_decision.thread_id)
+                            logger.info(f"Applied human-approved decision for {invitation.name}: {human_decision.action.value}")
+                            results.append(invitation)
+                            processed_count += 1
+                            await asyncio.sleep(1)
                     processed_profiles.add(invitation.profile)
-                    processed_count += 1
                     new_card_processed_this_pass = True
-                    await asyncio.sleep(1)
                     continue
 
                 decision_message = f"Name: {invitation.name}, Job Title: {invitation.job_title}, Profile Link: {invitation.profile}, Connection Info: {invitation.mutual_connections}."
@@ -437,8 +474,6 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
                     logger.warning(f"Skipping {invitation.name}; invitation left pending.")
                     processed_profiles.add(invitation.profile)
                     continue
-                decision = await execute_action(page, card, decision)
-
                 # If agent is undecided, fetch more information from profile
                 if decision.action == InvitationAction.UNDECIDED:
                     logger.info(f"Agent is undecided about {invitation.name}. Fetching profile information...")
@@ -446,14 +481,15 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
                     detailed_message = f"Full profile information for {invitation.name} ({invitation.job_title}):\n{profile_info}\n\nBased on this additional information, should we accept or ignore this invitation? Provide a reason for your decision."
                     detailed_decision = await get_decision(invitation.name, detailed_message, record_eval_cases)
                     if detailed_decision is not None:
-                        decision = await execute_action(page, card, detailed_decision)
+                        decision = detailed_decision
                     logger.info(f"Agent's final decision for {invitation.name}: {decision.action} - {getattr(decision, 'reason', '')}")
-                    if send_to_inbox and decision.action == InvitationAction.UNDECIDED:
-                        try:
-                            if await enqueue_review(review_client, GRAPH_ID, invitation.profile, {"name": invitation.name, "profile": invitation.profile, "job_title": invitation.job_title, "reason": decision.reason}):
-                                logger.info(f"Sent {invitation.name} to Agent Inbox for human review.")
-                        except Exception as e:
-                            logger.warning(f"Could not send {invitation.name} to Agent Inbox: {e!r}")
+
+                if await queue_invitation_proposal(review_client, invitation, decision):
+                    logger.info(
+                        "Queued proposed %s for %s; LinkedIn was not modified.",
+                        decision.action.value,
+                        invitation.name,
+                    )
 
                 invitation.decision = decision
                 results.append(invitation)
@@ -483,17 +519,18 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
         # Generate report
         logger.info("\n=== LinkedIn Invitation Processing Report ===")
         logger.info(f"Total invitations processed: {processed_count}")
-        logger.info("Newsletter invitations ignored: %d", ignored_newsletter_count)
+        logger.info("Newsletter invitations left pending: %d", newsletter_invitation_count)
 
         accepted = [r for r in results if r.decision and r.decision.action == InvitationAction.ACCEPT]
         ignored = [r for r in results if r.decision and r.decision.action == InvitationAction.IGNORE]
         undecided = [r for r in results if r.decision and r.decision.action == InvitationAction.UNDECIDED]
 
-        logger.info(f"\nAccepted ({len(accepted)}):")
+        action_prefix = "" if apply_inbox_decisions else "Proposed "
+        logger.info(f"\n{action_prefix}Accepted ({len(accepted)}):")
         for invitation in accepted:
             logger.info(f"- {invitation.name} ({invitation.job_title})\n  Profile: {invitation.profile}\n  Mutual connections: {invitation.mutual_connections}")
 
-        logger.info(f"\nIgnored ({len(ignored)}):")
+        logger.info(f"\n{action_prefix}Ignored ({len(ignored)}):")
         for invitation in ignored:
             reason = invitation.decision.reason if invitation.decision else "unknown"
             logger.info(f"- {invitation.name} ({invitation.job_title})\n  Profile: {invitation.profile}\n  Reason: {reason}")
@@ -512,7 +549,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-to-process", type=int, default=10, help="Number of LinkedIn invitations to process (default: 10).")
     parser.add_argument("--record-eval-cases", action="store_true", help="Record eval cases to YAML file.")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode.")
-    parser.add_argument("--send-to-inbox", action="store_true", help="Send invitations the agent is still undecided about to Agent Inbox (requires `langgraph dev`).")
+    parser.add_argument("--send-to-inbox", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--apply-inbox-decisions", action="store_true", help="Apply accept/ignore decisions a human made in Agent Inbox.")
     parser.add_argument(
         "--model-backend",
@@ -525,4 +562,4 @@ if __name__ == "__main__":
     if args.model_backend and args.model_backend != MODEL_BACKEND:
         agent = build_agent(args.model_backend)
 
-    asyncio.run(process_linkedin_invitations(args.num_to_process, record_eval_cases=args.record_eval_cases, headless=args.headless, send_to_inbox=args.send_to_inbox, apply_inbox_decisions=args.apply_inbox_decisions))
+    asyncio.run(process_linkedin_invitations(args.num_to_process, record_eval_cases=args.record_eval_cases, headless=args.headless, apply_inbox_decisions=args.apply_inbox_decisions))

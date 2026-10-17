@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - uses: astral-sh/setup-uv@v5
 
@@ -30,3 +32,32 @@ jobs:
 
       - name: Pytest
         run: uv run pytest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: agent-inbox/yarn.lock
+
+      - name: Apply Agent Inbox compatibility patch
+        run: git -C agent-inbox apply ../patches/agent-inbox-fixes.patch
+
+      - name: Install Agent Inbox dependencies
+        working-directory: agent-inbox
+        run: yarn install --frozen-lockfile
+
+      - name: Test Agent Inbox UI
+        working-directory: agent-inbox
+        run: yarn test
+
+      - name: Lint and format-check Agent Inbox UI
+        working-directory: agent-inbox
+        run: yarn lint && yarn format:check
+
+      - name: Typecheck Agent Inbox UI
+        working-directory: agent-inbox
+        run: yarn typecheck
+
+      - name: Build Agent Inbox UI
+        working-directory: agent-inbox
+        run: yarn build
