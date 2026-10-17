@@ -24,7 +24,7 @@
 | Variables / functions | snake_case | `get_invitations` |
 | Classes | PascalCase | `CorrectDecisionEvaluator` |
 | Constants | UPPER_SNAKE | `INVITATION_CARD_SELECTORS` |
-| Files | snake_case | `invitations_manager.py` |
+| Files | snake_case | `src/linkedin_agent/invitations.py` |
 | Test files | `test_*.py` in `tests/` | `test_selectors.py` |
 
 ### Formatting Tools

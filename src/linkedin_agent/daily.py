@@ -7,17 +7,15 @@ The daily run never writes to LinkedIn; live actions happen inside the review gr
 import argparse
 import asyncio
 import logging
-import sys
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-import inbox_manager
-import invitations_manager
-from linkedin_guard import blocked_write_summary
-from review_graph import GRAPH_ID, MESSAGE_GRAPH_ID
-from review_queue import get_review_client, recover_stuck_reviews, retire_legacy_reviews
-from unattended import HealthCheckError, LoginRequiredError, ReviewCounts, notify
+from linkedin_agent import inbox, invitations
+from linkedin_agent.linkedin.guard import blocked_write_summary
+from linkedin_agent.review.graphs import GRAPH_ID, MESSAGE_GRAPH_ID
+from linkedin_agent.review.queue import get_review_client, recover_stuck_reviews, retire_legacy_reviews
+from linkedin_agent.runtime import HealthCheckError, LoginRequiredError, ReviewCounts, notify
 
 logger = logging.getLogger("daily_run")
 
@@ -32,7 +30,7 @@ def configure_file_logging() -> None:
     handler = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=5, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     handler.setLevel(logging.INFO)
-    for name in ("daily_run", "invitations_manager", "inbox_manager", "unattended"):
+    for name in ("daily_run", "invitations_manager", "inbox_manager", "unattended", "llm"):
         logging.getLogger(name).addHandler(handler)
         logging.getLogger(name).setLevel(logging.INFO)
 
@@ -76,10 +74,10 @@ async def run(headless: bool) -> int:
         warnings.append(f"recover + retire legacy: {error!r}")
         exit_code = EXIT_HEALTH
     steps = [
-        ("invitations cleanup", lambda: invitations_manager.process_linkedin_invitations(headless=headless, cleanup_stale=True, unattended=True)),
-        ("messages cleanup", lambda: inbox_manager.manage_linkedin_inbox(headless=headless, unattended=True, cleanup_only=True)),
-        ("invitations propose", lambda: invitations_manager.process_linkedin_invitations(headless=headless, unattended=True)),
-        ("messages propose", lambda: inbox_manager.manage_linkedin_inbox(headless=headless, unattended=True)),
+        ("invitations cleanup", lambda: invitations.process_linkedin_invitations(headless=headless, cleanup_stale=True, unattended=True)),
+        ("messages cleanup", lambda: inbox.manage_linkedin_inbox(headless=headless, unattended=True, cleanup_only=True)),
+        ("invitations propose", lambda: invitations.process_linkedin_invitations(headless=headless, unattended=True)),
+        ("messages propose", lambda: inbox.manage_linkedin_inbox(headless=headless, unattended=True)),
     ]
 
     for name, step in steps:
@@ -112,20 +110,12 @@ async def run(headless: bool) -> int:
     return exit_code
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the LinkedIn agents unattended.")
+def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--headless", action="store_true", help="Run the browser in headless mode.")
-    parser.add_argument("--model-backend", choices=["ollama", "openai", "azure", "fallback"], default=None, help="Model backend for proposal ranking (default: MODEL_BACKEND env var).")
-    args = parser.parse_args()
 
+
+def run_command(args: argparse.Namespace) -> int:
     configure_file_logging()
-    if args.model_backend:
-        if args.model_backend != invitations_manager.MODEL_BACKEND:
-            invitations_manager.agent = invitations_manager.build_agent(args.model_backend)
-        if args.model_backend != inbox_manager.MODEL_BACKEND:
-            inbox_manager.model = inbox_manager.build_model(args.model_backend)
+    invitations.configure(args.model_backend)
+    inbox.configure(args.model_backend)
     return asyncio.run(run(args.headless))
-
-
-if __name__ == "__main__":
-    sys.exit(main())

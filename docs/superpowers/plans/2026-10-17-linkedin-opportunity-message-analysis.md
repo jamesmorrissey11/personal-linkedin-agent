@@ -4,7 +4,7 @@
 
 **Goal:** Build an accuracy-first CLI that incrementally collects relevant LinkedIn recruiting messages, extracts evidence-backed skills and experience once per opportunity, persists the private dataset locally, and generates grouped Markdown reports.
 
-**Architecture:** Add a root `message_analyzer.py` entry point backed by a feature-specific `message_analysis` package for models, SQLite persistence, Playwright collection, Pydantic AI analysis, and reporting. Keep this pipeline independent from `inbox_manager.py`, but open LinkedIn only through the shared read-only session in `linkedin_pages.py` (lock and write guard, from #46); use deterministic code for identity, deduplication, counting, and report assembly, while LLM agents handle opportunity segmentation, grounded extraction, verification, normalization proposals, and taxonomy grouping.
+**Architecture:** Add an `analysis` subpackage, `src/linkedin_agent/analysis/`, exposed as the `linkedin-agent analyze` subcommand, for models, SQLite persistence, Playwright collection, Pydantic AI analysis, and reporting. It is a subpackage (not one workflow module) because of its five modules and its own SQLite persistence boundary; record that reason in the PR. Keep this pipeline independent from `linkedin_agent/inbox.py`, but open LinkedIn only through the shared read-only session in `linkedin_agent.linkedin.session` (lock and write guard, from #46); use deterministic code for identity, deduplication, counting, and report assembly, while LLM agents handle opportunity segmentation, grounded extraction, verification, normalization proposals, and taxonomy grouping.
 
 **Tech Stack:** Python 3.10+, Playwright, Pydantic, Pydantic AI structured output, Azure OpenAI/OpenAI, SQLite from the standard library, pytest, pytest-playwright, pydantic-evals, Ruff, uv
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Analyze LinkedIn's Focused inbox and its Archived folder, never the Other inbox. Ignore in Agent Inbox archives conversations (#46), so declined recruiter messages are in Archived.
-- Open LinkedIn only with `linkedin_pages.open_linkedin(headless, unattended, lock_timeout=LOCK_TIMEOUT_SECONDS)` and never pass `approval`. Route every click through `linkedin_guard.safe_click`. Never type, press keys, or import `linkedin_actions`. Collection must not send, archive, or mark anything read.
+- Open LinkedIn only with `linkedin_agent.linkedin.session.open_linkedin(headless, unattended, lock_timeout=LOCK_TIMEOUT_SECONDS)` and never pass `approval`. Route every click through `linkedin_agent.linkedin.guard.safe_click`. Never type, press keys, or import `linkedin_agent.linkedin.actions`. Collection must not send, archive, or mark anything read.
 - Use a short lock timeout and exit nonzero when another LinkedIn task holds the lock. Release the session before model analysis starts.
 - Initial collection history is exactly 30 days unless `--initial-days` overrides it.
 - Relevant role families are Machine Learning Engineer, AI/LLM Engineer, Applied Scientist, Research Engineer, and MLOps/ML Platform Engineer.
@@ -23,8 +23,8 @@
 - Count each canonical item and taxonomy group at most once per distinct opportunity.
 - Every retained extraction requires an exact quote in a stored source message.
 - Raw messages, SQLite data, and reports stay under `.linkedin-analysis/` and must be git-ignored.
-- Follow `invitations_manager.py`'s Azure OpenAI setup, including `AzureDeveloperCliCredential` and the `/openai/v1` base URL.
-- Do not alter `inbox_manager.py`, its urgency ranking, or Agent Inbox behavior and its live actions.
+- Build models only with `linkedin_agent.llm.build_model(backend, azure_variant="invitations")` (the known-working `/openai/v1` + `AzureDeveloperCliCredential` Azure setup). Don't add model builders.
+- Do not alter `linkedin_agent/inbox.py`, its urgency ranking, or Agent Inbox behavior and its live actions.
 - Preserve multi-selector and accessibility-label scraping fallback chains.
 - Use `uv run` for all repository commands and Ruff for linting and formatting.
 
@@ -43,9 +43,9 @@
 ### Task 1: Private Storage and Domain Contracts
 
 **Files:**
-- Create: `message_analysis/__init__.py`
-- Create: `message_analysis/models.py`
-- Create: `message_analysis/storage.py`
+- Create: `src/linkedin_agent/analysis/__init__.py`
+- Create: `src/linkedin_agent/analysis/models.py`
+- Create: `src/linkedin_agent/analysis/storage.py`
 - Modify: `.gitignore`
 - Test: `tests/unit/test_message_analysis_storage.py`
 
@@ -62,7 +62,7 @@ Add tests asserting that `AnalysisStore.initialize()` creates a versioned schema
 
 Run: `uv run pytest tests/unit/test_message_analysis_storage.py -v`
 
-Expected: FAIL because `message_analysis.models`, `AnalysisStore`, and the schema do not exist.
+Expected: FAIL because `linkedin_agent.analysis.models`, `AnalysisStore`, and the schema do not exist.
 
 - [ ] **Step 3: Implement the domain models and schema migration**
 
@@ -91,7 +91,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit the storage foundation**
 
 ```bash
-git add .gitignore message_analysis tests/unit/test_message_analysis_storage.py
+git add .gitignore src/linkedin_agent/analysis tests/unit/test_message_analysis_storage.py
 git commit -m "feat(analysis): add private message analysis storage
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -100,16 +100,16 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ### Task 2: Focused and Archived Incremental Collector
 
 **Files:**
-- Create: `message_analysis/scraper.py`
+- Create: `src/linkedin_agent/analysis/scraper.py`
 - Create: `tests/playwright/test_message_analysis_scraping.py`
 - Create: `tests/playwright/fixtures/focused_inbox.html`
 - Create: `tests/playwright/fixtures/focused_conversation_history.html`
 - Create: `tests/playwright/fixtures/archived_inbox.html`
-- Modify: `tests/unit/test_no_message_writes.py` (scan `message_analysis/**/*.py` too)
+- Check: `tests/unit/test_no_message_writes.py` already scans `src/linkedin_agent/**` recursively, so it covers the collector
 
 **Interfaces:**
 - Consumes: `AnalysisStore`, `CollectedConversation`, and `MessageRecord` from Task 1.
-- Consumes: `linkedin_pages.open_linkedin` (session, lock, write guard) and `linkedin_guard.safe_click`.
+- Consumes: `linkedin_agent.linkedin.session.open_linkedin` (session, lock, write guard) and `linkedin_agent.linkedin.guard.safe_click`.
 - Produces: `async ensure_folder(page: Page, folder: Literal["focused", "archived"]) -> None`.
 - Produces: `async collect_messages(page: Page, store: AnalysisStore, cutoff: datetime, overlap: timedelta) -> CollectionSummary`, covering Focused then Archived and recording each conversation's folder.
 - Produces: selector fallback constants for the Focused tab, the Archived folder, conversation cards, message events, authors, bodies, timestamps, and scroll containers.
@@ -142,7 +142,7 @@ Simulate the same message appearing in an overlapping run with edited content. A
 
 - [ ] **Step 7: Run the scraper and storage tests**
 
-Extend `source_files()` in `tests/unit/test_no_message_writes.py` to include `message_analysis/**/*.py`, so the package can't click, type, or use write selectors outside the guard, and confirm its existing checks pass for the new files.
+Confirm `tests/unit/test_no_message_writes.py` (which scans `src/linkedin_agent/**` recursively) lists the new files and passes, so the collector can't click, type, or use write selectors outside the guard.
 
 Run: `uv run pytest tests/playwright/test_message_analysis_scraping.py tests/unit/test_message_analysis_storage.py tests/unit/test_no_message_writes.py -v`
 
@@ -151,7 +151,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit the collector**
 
 ```bash
-git add message_analysis/scraper.py tests/playwright tests/unit/test_no_message_writes.py
+git add src/linkedin_agent/analysis/scraper.py tests/playwright
 git commit -m "feat(analysis): collect focused and archived messages incrementally
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -160,14 +160,14 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ### Task 3: Opportunity Segmentation and Relevance
 
 **Files:**
-- Create: `message_analysis/agents.py`
-- Create: `message_analysis_evals.py`
-- Create: `linkedin_message_analysis_cases.yaml`
+- Create: `src/linkedin_agent/analysis/agents.py`
+- Create: `evals/analysis_run.py`
+- Create: `evals/message_analysis_cases.yaml`
 - Create: `tests/unit/test_message_analysis_opportunities.py`
 
 **Interfaces:**
 - Consumes: stored conversation messages and Task 1 domain models.
-- Produces: `build_azure_model()`, `build_openai_model()`, and `build_model(backend: str)` using the established project configuration.
+- Consumes: `linkedin_agent.llm.build_model(backend, azure_variant="invitations")` and `llm.model_settings()`.
 - Produces: `create_opportunity_agent(model) -> Agent`.
 - Produces: `async segment_pending_conversations(store: AnalysisStore, agent: Agent) -> AnalysisSummary`.
 
@@ -183,7 +183,7 @@ Expected: FAIL because the agents and orchestration do not exist.
 
 - [ ] **Step 3: Implement model construction and structured opportunity output**
 
-Copy the known-working Azure identity and `/openai/v1` pattern from `invitations_manager.py`. Define an inline system prompt and Pydantic output that returns distinct opportunities with company, role, role family, message IDs, first recruiting message, relevance, and grounded reason.
+Build the model with `llm.build_model(backend, azure_variant="invitations")`. Define an inline system prompt and Pydantic output that returns distinct opportunities with company, role, role family, message IDs, first recruiting message, relevance, and grounded reason.
 
 - [ ] **Step 4: Add relevance-boundary tests**
 
@@ -199,7 +199,7 @@ Use a conversation fixture containing two separate recruiting approaches. Assert
 
 - [ ] **Step 7: Add synthetic evaluation cases**
 
-Create non-personal YAML cases for every configured role family, excluded role, insufficient-detail message, mixed role, and multi-opportunity conversation. Implement `message_analysis_evals.py` to evaluate structured validity, relevance, and segmentation.
+Create non-personal YAML cases for every configured role family, excluded role, insufficient-detail message, mixed role, and multi-opportunity conversation. Implement `evals/analysis_run.py` to evaluate structured validity, relevance, and segmentation.
 
 - [ ] **Step 8: Run tests and evaluations**
 
@@ -207,14 +207,14 @@ Run: `uv run pytest tests/unit/test_message_analysis_opportunities.py -v`
 
 Expected: PASS.
 
-Run: `uv run python message_analysis_evals.py`
+Run: `uv run python -m evals.analysis_run`
 
 Expected: All committed synthetic cases pass against the configured evaluation model; if credentials are unavailable, record that the manual evaluation could not run rather than weakening tests.
 
 - [ ] **Step 9: Commit opportunity discovery**
 
 ```bash
-git add message_analysis/agents.py message_analysis_evals.py linkedin_message_analysis_cases.yaml tests/unit/test_message_analysis_opportunities.py
+git add src/linkedin_agent/analysis/agents.py evals/analysis_run.py evals/message_analysis_cases.yaml tests/unit/test_message_analysis_opportunities.py
 git commit -m "feat(analysis): identify relevant recruiting opportunities
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -223,11 +223,11 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ### Task 4: Grounded Extraction, Verification, and Normalization
 
 **Files:**
-- Modify: `message_analysis/agents.py`
-- Create: `message_analysis/pipeline.py`
+- Modify: `src/linkedin_agent/analysis/agents.py`
+- Create: `src/linkedin_agent/analysis/pipeline.py`
 - Create: `tests/unit/test_message_analysis_extraction.py`
-- Modify: `linkedin_message_analysis_cases.yaml`
-- Modify: `message_analysis_evals.py`
+- Modify: `evals/message_analysis_cases.yaml`
+- Modify: `evals/analysis_run.py`
 
 **Interfaces:**
 - Consumes: relevant persisted opportunities from Task 3.
@@ -275,14 +275,14 @@ Run: `uv run pytest tests/unit/test_message_analysis_extraction.py -v`
 
 Expected: PASS.
 
-Run: `uv run python message_analysis_evals.py`
+Run: `uv run python -m evals.analysis_run`
 
 Expected: Grounding and normalization evaluation cases pass when model credentials are available.
 
 - [ ] **Step 10: Commit grounded analysis**
 
 ```bash
-git add message_analysis/agents.py message_analysis/pipeline.py message_analysis_evals.py linkedin_message_analysis_cases.yaml tests/unit/test_message_analysis_extraction.py
+git add src/linkedin_agent/analysis/agents.py src/linkedin_agent/analysis/pipeline.py evals/analysis_run.py evals/message_analysis_cases.yaml tests/unit/test_message_analysis_extraction.py
 git commit -m "feat(analysis): extract and verify opportunity requirements
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -291,8 +291,8 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ### Task 5: Hybrid Taxonomy and Deterministic Aggregation
 
 **Files:**
-- Modify: `message_analysis/agents.py`
-- Modify: `message_analysis/pipeline.py`
+- Modify: `src/linkedin_agent/analysis/agents.py`
+- Modify: `src/linkedin_agent/analysis/pipeline.py`
 - Create: `tests/unit/test_message_analysis_taxonomy.py`
 
 **Interfaces:**
@@ -332,7 +332,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit taxonomy and aggregation**
 
 ```bash
-git add message_analysis/agents.py message_analysis/pipeline.py tests/unit/test_message_analysis_taxonomy.py
+git add src/linkedin_agent/analysis/agents.py src/linkedin_agent/analysis/pipeline.py tests/unit/test_message_analysis_taxonomy.py
 git commit -m "feat(analysis): group and aggregate opportunity requirements
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -341,7 +341,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ### Task 6: Evidence-Backed Markdown Reports
 
 **Files:**
-- Create: `message_analysis/report.py`
+- Create: `src/linkedin_agent/analysis/report.py`
 - Create: `tests/unit/test_message_analysis_report.py`
 
 **Interfaces:**
@@ -380,7 +380,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit report generation**
 
 ```bash
-git add message_analysis/report.py tests/unit/test_message_analysis_report.py
+git add src/linkedin_agent/analysis/report.py tests/unit/test_message_analysis_report.py
 git commit -m "feat(analysis): generate evidence-backed reports
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
@@ -389,14 +389,15 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
 ### Task 7: CLI Orchestration, Failure Semantics, and Documentation
 
 **Files:**
-- Create: `message_analyzer.py`
+- Create: `src/linkedin_agent/analysis/command.py` (`add_arguments` with `collect`, `report`, and `run` subcommands, plus `run_command`)
+- Modify: `src/linkedin_agent/cli.py` (register the `analyze` subcommand)
 - Create: `tests/unit/test_message_analyzer_cli.py`
 - Modify: `README.md`
 
 **Interfaces:**
 - Consumes: storage, scraper, agents, pipeline, taxonomy, aggregation, and reporting interfaces from Tasks 1-6.
-- Produces: `build_parser() -> argparse.ArgumentParser`.
-- Produces: `async run_command(args: argparse.Namespace) -> int`.
+- Produces: `add_arguments(parser: argparse.ArgumentParser) -> None`, registered by `cli.py` as `linkedin-agent analyze`.
+- Produces: `run_command(args: argparse.Namespace) -> int`.
 - Produces: subcommands `collect`, `report`, and `run`, with `run` as the default behavior.
 
 - [ ] **Step 1: Write failing parser and command-routing tests**
@@ -411,7 +412,7 @@ Expected: FAIL because the CLI does not exist.
 
 - [ ] **Step 3: Implement independent login, model, and command orchestration**
 
-Open LinkedIn with `linkedin_pages.open_linkedin` (which reuses `playwright/.auth/state.json` and the manual-login flow, holds the LinkedIn lock, and installs the write guard) only for the collection stage, and close it before analysis. Map `LinkedInBusyError` and `LoginRequiredError` to clear messages and a nonzero exit. Initialize Azure/OpenAI models only for analysis stages, and keep all existing manager scripts untouched.
+Open LinkedIn with `linkedin_agent.linkedin.session.open_linkedin` (which reuses `playwright/.auth/state.json` and the manual-login flow, holds the LinkedIn lock, and installs the write guard) only for the collection stage, and close it before analysis. Map `LinkedInBusyError` and `LoginRequiredError` to clear messages and a nonzero exit. Initialize Azure/OpenAI models only for analysis stages, and keep the existing workflows (`invitations.py`, `inbox.py`, `daily.py`) untouched.
 
 - [ ] **Step 4: Write failing partial-run and resume tests**
 
@@ -445,14 +446,14 @@ Run: `uv run pytest`
 
 Expected: PASS.
 
-Run: `uv run python message_analysis_evals.py`
+Run: `uv run python -m evals.analysis_run`
 
 Expected: All committed synthetic cases pass when configured model credentials are available; otherwise report the credential blocker explicitly.
 
 - [ ] **Step 9: Commit the complete CLI**
 
 ```bash
-git add message_analyzer.py tests/unit/test_message_analyzer_cli.py README.md
+git add src/linkedin_agent/analysis/command.py src/linkedin_agent/cli.py tests/unit/test_message_analyzer_cli.py README.md
 git commit -m "feat(analysis): add linkedin opportunity analysis cli
 
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"

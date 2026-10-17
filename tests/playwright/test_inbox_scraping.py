@@ -1,4 +1,4 @@
-"""Tests for the conversation-thread scraping selectors used by inbox_manager.py.
+"""Tests for the conversation-thread scraping selectors used by inbox.py.
 
 Loads a static fixture (tests/playwright/fixtures/inbox_thread_list.html) instead of a live
 LinkedIn session, and exercises the same selector strings the production code uses.

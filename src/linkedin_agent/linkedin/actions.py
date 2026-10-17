@@ -9,9 +9,11 @@ from urllib.parse import urlparse
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from linkedin_guard import ApprovedAction, safe_click
-from linkedin_pages import UNKNOWN_AUTHORS, ConversationMessage, LinkedInBusyError, collect_invitation_profiles, extract_conversation_messages, get_invitation_cards, get_invitation_info, get_logged_in_user_name, open_linkedin, page_reports_no_invitations
-from unattended import LoginRequiredError
+from linkedin_agent.linkedin.guard import ApprovedAction, safe_click
+from linkedin_agent.linkedin.models import ConversationMessage
+from linkedin_agent.linkedin.pages import UNKNOWN_AUTHORS, collect_invitation_profiles, extract_conversation_messages, get_invitation_cards, get_invitation_info, get_logged_in_user_name, page_reports_no_invitations
+from linkedin_agent.linkedin.session import LinkedInBusyError, open_linkedin
+from linkedin_agent.runtime import LoginRequiredError
 
 COMPOSER_SELECTORS = [
     ".msg-form__contenteditable[contenteditable='true']",

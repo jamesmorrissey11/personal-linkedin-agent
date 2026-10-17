@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from review_queue import INTERRUPTED_NOTE, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_pending_review, mark_applied, mark_outcome, recover_stuck_reviews, retire_legacy_reviews, supersede_review
+from linkedin_agent.review.queue import INTERRUPTED_NOTE, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_pending_review, mark_applied, mark_outcome, recover_stuck_reviews, retire_legacy_reviews, supersede_review
 from tests.async_helpers import run_async_test
 
 NOW = datetime(2026, 10, 17, 12, 0, tzinfo=timezone.utc)

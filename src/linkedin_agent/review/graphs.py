@@ -12,9 +12,9 @@ from typing import Any, Literal, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from linkedin_actions import perform_invitation_action, perform_message_action
-from review_queue import get_review_client, recover_stuck_reviews
-from unattended import notify_async
+from linkedin_agent.linkedin.actions import perform_invitation_action, perform_message_action
+from linkedin_agent.review.queue import get_review_client, recover_stuck_reviews
+from linkedin_agent.runtime import notify_async
 
 GRAPH_ID = "invitation_review"
 logger = logging.getLogger("review_graph")

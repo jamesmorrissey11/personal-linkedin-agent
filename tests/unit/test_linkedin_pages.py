@@ -1,7 +1,6 @@
 import pytest
 
-import tests.playwright.helpers  # noqa: F401  (placeholder Azure env vars so the managers import)
-from linkedin_pages import LinkedInBusyError, linkedin_lock
+from linkedin_agent.linkedin.session import LinkedInBusyError, linkedin_lock
 from tests.async_helpers import run_async_test
 
 
@@ -25,18 +24,17 @@ def test_lock_is_released_after_exit(tmp_path):
     assert run_async_test(scenario) is True
 
 
-def test_managers_reexport_moved_helpers():
-    import inbox_manager
-    import invitations_manager
-    import linkedin_pages
+def test_workflows_use_the_shared_page_helpers():
+    from linkedin_agent import inbox, invitations
+    from linkedin_agent.linkedin import pages
 
-    assert invitations_manager.get_invitation_info is linkedin_pages.get_invitation_info
-    assert inbox_manager.extract_conversation_messages is linkedin_pages.extract_conversation_messages
+    assert invitations.get_invitation_info is pages.get_invitation_info
+    assert inbox.extract_conversation_messages is pages.extract_conversation_messages
 
 
 def test_open_linkedin_passes_approval_to_the_guard(tmp_path, monkeypatch):
-    import linkedin_pages
-    from linkedin_guard import ApprovedAction
+    from linkedin_agent.linkedin import session
+    from linkedin_agent.linkedin.guard import ApprovedAction
 
     installed = []
 
@@ -74,14 +72,14 @@ def test_open_linkedin_passes_approval_to_the_guard(tmp_path, monkeypatch):
         installed.append(approval)
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(linkedin_pages, "async_playwright", FakePlaywright)
-    monkeypatch.setattr(linkedin_pages, "install_linkedin_write_guard", fake_install)
+    monkeypatch.setattr(session, "async_playwright", FakePlaywright)
+    monkeypatch.setattr(session, "install_linkedin_write_guard", fake_install)
     approval = ApprovedAction("message", "send")
 
     async def scenario():
-        async with linkedin_pages.open_linkedin(headless=True, unattended=True, approval=approval, lock_timeout=1):
+        async with session.open_linkedin(headless=True, unattended=True, approval=approval, lock_timeout=1):
             pass
-        async with linkedin_pages.open_linkedin(headless=True, unattended=True, lock_timeout=1):
+        async with session.open_linkedin(headless=True, unattended=True, lock_timeout=1):
             pass
 
     run_async_test(scenario)

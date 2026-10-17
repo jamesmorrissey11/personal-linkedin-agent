@@ -23,7 +23,7 @@ AI-powered LinkedIn automation agent. Azure OpenAI (via Pydantic AI) decides acc
 
 <!-- Describe how tests should be written and organized. -->
 
-- **Framework:** pytest + pytest-playwright (HTML fixtures); `evals.py` for agent decisions
+- **Framework:** pytest + pytest-playwright (HTML fixtures); `uv run python -m evals.run` for agent decisions
 - **Location:** `tests/unit/` and `tests/playwright/`
 - **Naming:** `test_*.py`, `test_<behavior>` functions
 - **Coverage expectations:** new scraping paths get a fixture-based test
@@ -53,7 +53,7 @@ project-root/
 
 <!-- Explicit anti-patterns to avoid. -->
 
-- Do not copy `inbox_manager.py`'s Azure OpenAI client setup; follow `invitations_manager.py`
+- Do not copy the `"inbox"` Azure OpenAI client variant in `src/linkedin_agent/llm.py`; follow the `"invitations"` variant
 - Do not commit secrets or credentials
 - Do not add dependencies without documenting the reason (`uv add`, commit `uv.lock`)
 - Do not start implementation without a corresponding GitHub Issue. Every work request must be tracked.

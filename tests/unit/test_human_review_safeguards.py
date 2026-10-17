@@ -1,9 +1,7 @@
 import pytest
 
-import inbox_manager
-import invitations_manager
-from inbox_manager import ConversationMessage, InboxMessage, MessageRanking
-from invitations_manager import Invitation, InvitationAction, InvitationDecision
+from linkedin_agent import inbox, invitations
+from linkedin_agent.linkedin.models import ConversationMessage, InboxMessage, Invitation, InvitationAction, InvitationDecision, MessageRanking
 from tests.async_helpers import run_async_test
 
 
@@ -57,11 +55,11 @@ def test_agent_invitation_proposal_only_queues_and_does_not_click(monkeypatch):
         queued.append((client, graph_id, key, input_data))
         return True
 
-    monkeypatch.setattr(invitations_manager, "enqueue_review", fake_enqueue)
+    monkeypatch.setattr(invitations, "enqueue_review", fake_enqueue)
     card = FakeInvitationCard()
     candidate = invitation()
 
-    created = run_async_test(lambda: invitations_manager.queue_invitation_proposal(object(), candidate, candidate.decision))
+    created = run_async_test(lambda: invitations.queue_invitation_proposal(object(), candidate, candidate.decision))
 
     assert created is True
     assert queued[0][2] == candidate.profile
@@ -77,11 +75,11 @@ def test_undecided_invitation_is_queued_for_judgment_without_clicking(monkeypatc
         queued.append(input_data)
         return True
 
-    monkeypatch.setattr(invitations_manager, "enqueue_review", fake_enqueue)
+    monkeypatch.setattr(invitations, "enqueue_review", fake_enqueue)
     card = FakeInvitationCard()
     candidate = invitation(InvitationAction.UNDECIDED)
 
-    created = run_async_test(lambda: invitations_manager.queue_invitation_proposal(object(), candidate, candidate.decision))
+    created = run_async_test(lambda: invitations.queue_invitation_proposal(object(), candidate, candidate.decision))
 
     assert created is True
     assert queued[0]["label"] == "Needs your judgment"
@@ -97,9 +95,9 @@ def test_failed_llm_invitation_is_queued_with_error(monkeypatch):
         queued.append(input_data)
         return True
 
-    monkeypatch.setattr(invitations_manager, "enqueue_review", fake_enqueue)
+    monkeypatch.setattr(invitations, "enqueue_review", fake_enqueue)
 
-    run_async_test(lambda: invitations_manager.queue_invitation_proposal(object(), invitation(), None, "TimeoutError()"))
+    run_async_test(lambda: invitations.queue_invitation_proposal(object(), invitation(), None, "TimeoutError()"))
 
     assert queued[0]["label"] == "Needs your judgment"
     assert "TimeoutError()" in queued[0]["reason"]
@@ -109,12 +107,12 @@ def test_invitation_queue_failure_is_surfaced_without_clicking(monkeypatch):
     async def failed_enqueue(*args, **kwargs):
         raise RuntimeError("review server unavailable")
 
-    monkeypatch.setattr(invitations_manager, "enqueue_review", failed_enqueue)
+    monkeypatch.setattr(invitations, "enqueue_review", failed_enqueue)
     card = FakeInvitationCard()
     candidate = invitation()
 
     with pytest.raises(RuntimeError, match="review server unavailable"):
-        run_async_test(lambda: invitations_manager.queue_invitation_proposal(object(), candidate, candidate.decision))
+        run_async_test(lambda: invitations.queue_invitation_proposal(object(), candidate, candidate.decision))
 
     assert card.accept.clicks == 0
     assert card.ignore.clicks == 0
@@ -127,13 +125,13 @@ def test_every_message_where_other_person_spoke_last_is_queued_with_labels(monke
         queued.append(input_data)
         return True
 
-    monkeypatch.setattr(inbox_manager, "enqueue_review", fake_enqueue)
+    monkeypatch.setattr(inbox, "enqueue_review", fake_enqueue)
     unscored = message()
     unscored.ranking = None
     from_user = message()
     from_user.from_user = True
 
-    counts = run_async_test(lambda: inbox_manager.send_messages_to_inbox(object(), [message(), message(urgency=2), message(reply=""), unscored, from_user], min_urgency=4))
+    counts = run_async_test(lambda: inbox.send_messages_to_inbox(object(), [message(), message(urgency=2), message(reply=""), unscored, from_user], min_urgency=4))
 
     assert counts.new == 4
     assert counts.needs_judgment == 1
@@ -156,7 +154,7 @@ def test_message_queue_failure_is_surfaced(monkeypatch):
     async def failed_enqueue(*args, **kwargs):
         raise RuntimeError("review server unavailable")
 
-    monkeypatch.setattr(inbox_manager, "enqueue_review", failed_enqueue)
+    monkeypatch.setattr(inbox, "enqueue_review", failed_enqueue)
 
     with pytest.raises(RuntimeError, match="review server unavailable"):
-        run_async_test(lambda: inbox_manager.send_messages_to_inbox(object(), [message()], min_urgency=4))
+        run_async_test(lambda: inbox.send_messages_to_inbox(object(), [message()], min_urgency=4))

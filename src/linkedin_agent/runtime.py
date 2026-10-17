@@ -1,4 +1,4 @@
-"""Shared helpers for unattended (scheduled) runs: errors, report counts, and macOS notifications."""
+"""Shared runtime helpers: errors, report counts, console logging, and macOS notifications."""
 
 import asyncio
 import logging
@@ -7,6 +7,14 @@ import sys
 from dataclasses import dataclass
 
 logger = logging.getLogger("unattended")
+
+
+def configure_console_logging() -> None:
+    """Rich console logging for CLI runs; called once at startup, never at import."""
+    from rich.logging import RichHandler
+
+    logging.basicConfig(level=logging.WARNING, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(show_level=True)])
+
 
 # Stop scanning once this many consecutive items are already known (queued, applied, superseded, or self-replied).
 KNOWN_STREAK_STOP = 5

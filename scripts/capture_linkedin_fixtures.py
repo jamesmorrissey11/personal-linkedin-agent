@@ -7,8 +7,9 @@ import logging
 import re
 from pathlib import Path
 
-from linkedin_guard import blocked_writes, reset_blocked_writes, safe_click
-from linkedin_pages import extract_conversation_messages, get_logged_in_user_name, open_linkedin
+from linkedin_agent.linkedin.guard import blocked_writes, reset_blocked_writes, safe_click
+from linkedin_agent.linkedin.pages import extract_conversation_messages, get_logged_in_user_name
+from linkedin_agent.linkedin.session import open_linkedin
 
 logger = logging.getLogger("capture_linkedin_fixtures")
 

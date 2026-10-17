@@ -2,11 +2,12 @@ from contextlib import asynccontextmanager
 
 import pytest
 
-import linkedin_actions
-from linkedin_actions import message_precheck, perform_invitation_action, perform_message_action, same_profile
-from linkedin_pages import ConversationMessage, LinkedInBusyError
+from linkedin_agent.linkedin import actions
+from linkedin_agent.linkedin.actions import message_precheck, perform_invitation_action, perform_message_action, same_profile
+from linkedin_agent.linkedin.models import ConversationMessage
+from linkedin_agent.linkedin.session import LinkedInBusyError
+from linkedin_agent.runtime import LoginRequiredError
 from tests.async_helpers import run_async_test
-from unattended import LoginRequiredError
 
 NEW_MESSAGE_NOTE = "A new message arrived since this was queued; nothing was sent. Review it and choose again."
 ALREADY_REPLIED_NOTE = "You already replied on LinkedIn; nothing was sent. Send this too by choosing again, or Ignore."
@@ -41,7 +42,7 @@ def test_login_expired_returns_note(monkeypatch):
         raise LoginRequiredError("expired")
         yield
 
-    monkeypatch.setattr(linkedin_actions, "open_linkedin", expired_session)
+    monkeypatch.setattr(actions, "open_linkedin", expired_session)
 
     result = run_async_test(lambda: perform_invitation_action("https://www.linkedin.com/in/ada", "accept"))
 
@@ -55,7 +56,7 @@ def test_busy_lock_returns_note(monkeypatch):
         raise LinkedInBusyError("busy")
         yield
 
-    monkeypatch.setattr(linkedin_actions, "open_linkedin", busy_session)
+    monkeypatch.setattr(actions, "open_linkedin", busy_session)
 
     result = run_async_test(lambda: perform_invitation_action("https://www.linkedin.com/in/ada", "ignore"))
 
@@ -67,7 +68,7 @@ def test_empty_reply_fails_without_opening_browser(monkeypatch):
     def unexpected_browser(*_args, **_kwargs):
         raise AssertionError("browser should not open")
 
-    monkeypatch.setattr(linkedin_actions, "open_linkedin", unexpected_browser)
+    monkeypatch.setattr(actions, "open_linkedin", unexpected_browser)
 
     result = run_async_test(lambda: perform_message_action("https://www.linkedin.com/messaging/thread/1/", "reply", " \n ", "hello"))
 

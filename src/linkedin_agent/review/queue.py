@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from langgraph_sdk import get_client
 
 SEARCH_PAGE_SIZE = 100
-LANGGRAPH_URL = os.environ.get("LANGGRAPH_URL", "http://localhost:2024")
+DEFAULT_LANGGRAPH_URL = "http://localhost:2024"
 PENDING_STATUSES = {"interrupted", "busy"}
 ACTIVE_RUN_STATUSES = {"pending", "running"}
 INTERRUPTED_NOTE = "The last attempt was interrupted; check LinkedIn and choose again."
@@ -19,7 +19,7 @@ logger = logging.getLogger("review_queue")
 def get_review_client():
     # A local `langgraph dev` server ignores the key; a deployed one needs it.
     api_key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGSMITH_PERSONAL_ACCESS_TOKEN")
-    return get_client(url=LANGGRAPH_URL, api_key=api_key)
+    return get_client(url=os.environ.get("LANGGRAPH_URL", DEFAULT_LANGGRAPH_URL), api_key=api_key)
 
 
 async def enqueue_review(client, graph_id: str, key: str, input_data: dict) -> bool:

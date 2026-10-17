@@ -1,120 +1,34 @@
+"""Invitation workflow: propose accept/ignore for each pending LinkedIn invitation and queue it for review.
+
+Never clicks Accept or Ignore. A human decides each item in Agent Inbox, and the review graph acts on it.
+"""
+
 import argparse
 import asyncio
 import logging
-import os
 from pathlib import Path
 
-import azure.identity.aio
 import yaml
-from dotenv import load_dotenv
-from openai import AsyncOpenAI
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic_ai import Agent, NativeOutput
-from pydantic_ai.models.fallback import FallbackModel
-from pydantic_ai.models.ollama import OllamaModel
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.ollama import OllamaProvider
-from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.settings import ModelSettings
-from rich.logging import RichHandler
 
-from linkedin_pages import (  # noqa: F401  (unused names are re-exported for existing callers)
-    INVITATION_CARD_SELECTORS,
-    MAX_SCANNED_INVITATIONS,
-    NO_PENDING_INVITATIONS_TEXT,
-    Invitation,
-    InvitationAction,
-    InvitationDecision,
-    collect_invitation_profiles,
-    get_invitation_cards,
-    get_invitation_info,
-    open_linkedin,
-    page_reports_no_invitations,
-)
-from review_graph import GRAPH_ID
-from review_queue import classify_review, enqueue_review, fetch_pending_reviews, find_pending_review, get_review_client, supersede_review
-from unattended import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts
+from linkedin_agent.linkedin.models import Invitation, InvitationAction, InvitationDecision
+from linkedin_agent.linkedin.pages import collect_invitation_profiles, get_invitation_cards, get_invitation_info, page_reports_no_invitations
+from linkedin_agent.linkedin.session import open_linkedin
+from linkedin_agent.llm import build_model, default_model_backend, model_settings
+from linkedin_agent.review.graphs import GRAPH_ID
+from linkedin_agent.review.queue import classify_review, enqueue_review, fetch_pending_reviews, find_pending_review, get_review_client, supersede_review
+from linkedin_agent.runtime import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts
 
-# Setup logging with rich
-logging.basicConfig(level=logging.WARNING, format="%(message)s", datefmt="[%X]", handlers=[RichHandler(show_level=True)])
 logger = logging.getLogger("invitations_manager")
 logger.setLevel(logging.INFO)
 
 PROFILE_NAVIGATION_TIMEOUT_MS = 45000
 PROFILE_CONTENT_TIMEOUT_MS = 15000
 NEWSLETTER_IGNORE_SELECTOR = "button[aria-label^='Ignore invitation for ']"
-
-load_dotenv()
-
-# Model backend selection: "ollama" (default), "openai", "azure", or "fallback" (try Ollama first,
-# fall back to Azure OpenAI on failure). Override via MODEL_BACKEND env var or the --model-backend
-# CLI flag.
-MODEL_BACKEND = os.environ.get("MODEL_BACKEND", "ollama")
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:latest")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
-
-# Bound every LLM call so a small local model stuck generating (Ollama runs with --context-shift, so it
-# never hits the context limit) can't stall the run. The OpenAI SDK retries timeouts twice, so the
-# worst case per call is roughly 3x LLM_TIMEOUT_SECONDS.
-LLM_MODEL_SETTINGS = ModelSettings(
-    max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "512")),
-    timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "60")),
-)
-
-
-def build_ollama_model() -> OllamaModel:
-    """Build the local Ollama model. Requires `ollama serve` running locally with OLLAMA_MODEL pulled."""
-    return OllamaModel(OLLAMA_MODEL, provider=OllamaProvider(base_url=OLLAMA_BASE_URL))
-
-
-def build_openai_model() -> OpenAIChatModel:
-    """Build a standard OpenAI API model using OPENAI_API_KEY."""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("Missing required OPENAI_API_KEY for --model-backend openai. Set it in .env or choose another backend.")
-    openai_client = AsyncOpenAI(api_key=api_key)
-    return OpenAIChatModel(OPENAI_MODEL, provider=OpenAIProvider(openai_client=openai_client))
-
-
-def build_azure_model() -> OpenAIChatModel:
-    """Build the Azure OpenAI model using this script's known-working client-setup pattern."""
-    required_vars = ["AZURE_TENANT_ID", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_CHAT_DEPLOYMENT"]
-    missing_vars = [var for var in required_vars if not os.environ.get(var)]
-    if missing_vars:
-        raise RuntimeError(f"Missing required Azure OpenAI environment variable(s) for --model-backend azure/fallback: {', '.join(missing_vars)}. Set them in .env, or use --model-backend ollama (the default) to run without Azure credentials.")
-    token_provider = azure.identity.aio.get_bearer_token_provider(
-        azure.identity.aio.AzureDeveloperCliCredential(tenant_id=os.environ["AZURE_TENANT_ID"]),
-        "https://cognitiveservices.azure.com/.default",
-    )
-    azure_client = AsyncOpenAI(
-        base_url=os.environ["AZURE_OPENAI_ENDPOINT"] + "/openai/v1",
-        api_key=token_provider,
-    )
-    return OpenAIChatModel(os.environ["AZURE_OPENAI_CHAT_DEPLOYMENT"], provider=OpenAIProvider(openai_client=azure_client))
-
-
-def build_model(backend: str):
-    """Build the Pydantic AI model for the given backend.
-
-    OpenAI and Azure credentials are read only when their corresponding backend is selected. Note that
-    "fallback" constructs the Azure model eagerly (FallbackModel requires both models up front), so
-    Azure credentials must still be present at startup even though Ollama is tried first at request time.
-    """
-    if backend == "ollama":
-        chosen_model = build_ollama_model()
-    elif backend == "openai":
-        chosen_model = build_openai_model()
-    elif backend == "azure":
-        chosen_model = build_azure_model()
-    elif backend == "fallback":
-        chosen_model = FallbackModel(build_ollama_model(), build_azure_model())
-    else:
-        raise ValueError(f"Unknown model backend: {backend!r}. Expected 'ollama', 'openai', 'azure', or 'fallback'.")
-    logger.info("Using model backend=%s (model_name=%s)", backend, chosen_model.model_name)
-    return chosen_model
+EVAL_CASES_PATH = Path(__file__).resolve().parents[2] / "evals" / "invitation_cases.yaml"
 
 
 INVITATION_DECISION_SYSTEM_PROMPT = """Decide whether to accept or ignore LinkedIn invitations based on the profile information provided.
@@ -127,24 +41,32 @@ If you have any uncertainty at all as to whether the person meets the acceptance
 
 def build_agent(backend: str) -> Agent[None, InvitationDecision]:
     return Agent(
-        build_model(backend),
+        build_model(backend, azure_variant="invitations"),
         system_prompt=INVITATION_DECISION_SYSTEM_PROMPT,
         output_type=NativeOutput(InvitationDecision),
-        model_settings=LLM_MODEL_SETTINGS,
+        model_settings=model_settings(),
     )
 
 
-# Built at import time using MODEL_BACKEND so `evals.py`'s `from invitations_manager import agent` works
-# without requiring CLI args; `--model-backend` (if passed) rebuilds this in the __main__ block below.
-agent = build_agent(MODEL_BACKEND)
+_agent: Agent[None, InvitationDecision] | None = None
+
+
+def configure(backend: str | None = None) -> Agent[None, InvitationDecision]:
+    """Build the decision agent for `backend` (default: MODEL_BACKEND). CLI commands call this at startup so a misconfigured backend fails fast."""
+    global _agent
+    _agent = build_agent(backend or default_model_backend())
+    return _agent
+
+
+def get_agent() -> Agent[None, InvitationDecision]:
+    return _agent or configure()
 
 
 async def run_and_log_agent(case_name: str, input_message: str):
     """
     Run the agent on the input_message, log input/output as a YAML evals case, and return the decision.
     """
-    log_path = "linkedin_invitation_cases.yaml"
-    agent_result = await agent.run(input_message)
+    agent_result = await get_agent().run(input_message)
     decision = agent_result.output
     logger.info("%d input tokens, %d output tokens used for decision", agent_result.usage().input_tokens, agent_result.usage().output_tokens)
     case = {
@@ -158,7 +80,7 @@ async def run_and_log_agent(case_name: str, input_message: str):
         else None,
         "metadata": {"model_name": agent_result.response.model_name},
     }
-    out_path = Path(log_path)
+    out_path = EVAL_CASES_PATH
     if out_path.exists():
         with out_path.open("r", encoding="utf-8") as f:
             dataset_dict = yaml.safe_load(f) or {"cases": []}
@@ -175,7 +97,7 @@ async def try_decision(case_name: str, input_message: str, record_eval_cases: bo
     try:
         if record_eval_cases:
             return await run_and_log_agent(case_name, input_message), None
-        agent_result = await agent.run(input_message)
+        agent_result = await get_agent().run(input_message)
         logger.debug(
             "%d input tokens, %d output tokens used for decision",
             agent_result.usage().input_tokens,
@@ -242,7 +164,7 @@ async def queue_invitation_proposal(review_client, invitation: Invitation, decis
 
 
 def linkedin_session(headless: bool, unattended: bool):
-    """Yield (context, page) for a logged-in LinkedIn session; see `linkedin_pages.open_linkedin`."""
+    """Yield (context, page) for a logged-in LinkedIn session; see `linkedin.session.open_linkedin`."""
     return open_linkedin(headless, unattended)
 
 
@@ -389,22 +311,15 @@ async def process_linkedin_invitations(num_to_process: int = 100, record_eval_ca
     return counts
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Process LinkedIn invitations.")
+def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--num-to-process", type=int, default=100, help="Safety cap on NEW invitations to queue per run (default: 100). Scanning stops earlier once it reaches invitations already known.")
-    parser.add_argument("--record-eval-cases", action="store_true", help="Record eval cases to YAML file.")
+    parser.add_argument("--record-eval-cases", action="store_true", help="Record eval cases to evals/invitation_cases.yaml.")
     parser.add_argument("--headless", action="store_true", help="Run browser in headless mode.")
     parser.add_argument("--send-to-inbox", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--cleanup-stale", action="store_true", help="Close pending reviews for invitations no longer on LinkedIn (only after a full, non-empty scan).")
-    parser.add_argument(
-        "--model-backend",
-        choices=["ollama", "openai", "azure", "fallback"],
-        default=None,
-        help=f"Model backend to use (default: MODEL_BACKEND env var, currently {MODEL_BACKEND!r}).",
-    )
-    args = parser.parse_args()
 
-    if args.model_backend and args.model_backend != MODEL_BACKEND:
-        agent = build_agent(args.model_backend)
 
+def run_command(args: argparse.Namespace) -> int:
+    configure(args.model_backend)
     asyncio.run(process_linkedin_invitations(args.num_to_process, record_eval_cases=args.record_eval_cases, headless=args.headless, cleanup_stale=args.cleanup_stale))
+    return 0

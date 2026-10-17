@@ -29,22 +29,22 @@ not open LinkedIn or use the cached authenticated browser session.
 uv run pytest -v
 ```
 
-The tests live under `tests/playwright/`, with pytest configuration in `pyproject.toml`.
+The tests live under `tests/playwright/` and `tests/unit/`, with pytest configuration in `pyproject.toml`. They import the installed `linkedin_agent` package (`uv sync` installs it in editable mode from `src/`).
 
 ## Invitation-decision evaluations
 
-`evals.py` runs the invitation-decision agent against `linkedin_invitation_cases.yaml` using
+`evals/run.py` runs the invitation-decision agent against `evals/invitation_cases.yaml` using
 `CorrectDecisionEvaluator` and `IsInstance`.
 
 ```shell
-uv run python evals.py
+uv run python -m evals.run
 ```
 
 Ollama is the default model backend. To evaluate Azure OpenAI or the fallback chain instead:
 
 ```shell
-MODEL_BACKEND=azure uv run python evals.py
-MODEL_BACKEND=fallback uv run python evals.py
+MODEL_BACKEND=azure uv run python -m evals.run
+MODEL_BACKEND=fallback uv run python -m evals.run
 ```
 
 ## Coverage

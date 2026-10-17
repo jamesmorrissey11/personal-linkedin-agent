@@ -7,8 +7,8 @@ POST to the messaging write endpoint that actually reaches the "server".
 import pytest
 from playwright.async_api import async_playwright
 
-import linkedin_guard
-from linkedin_guard import ApprovedAction, blocked_writes, install_linkedin_write_guard, reset_blocked_writes, safe_click
+from linkedin_agent.linkedin import guard
+from linkedin_agent.linkedin.guard import ApprovedAction, blocked_writes, install_linkedin_write_guard, reset_blocked_writes, safe_click
 from tests.async_helpers import run_async_test
 from tests.playwright.helpers import FIXTURES_DIR
 
@@ -87,7 +87,7 @@ def test_raw_click_on_send_is_stopped_by_network_guard(headless):
         assert await page.evaluate("window.__writeFailures") == 1
         assert hits == []
         assert any(event.layer == "network" for event in blocked_writes())
-        assert "blocked" in linkedin_guard.blocked_write_summary()
+        assert "blocked" in guard.blocked_write_summary()
 
     run_scenario(scenario, headless=headless)
 

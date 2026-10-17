@@ -23,7 +23,7 @@ files and blocks the agent from finishing while a relevant check is failing.
 The hooks perform local, non-destructive validation only:
 
 * Python formatting is checked with `ruff format --check`; the hook does not rewrite files.
-* `python evals.py` is intentionally excluded. It calls Azure OpenAI, requires credentials, incurs API
+* `python -m evals.run` is intentionally excluded. It calls Azure OpenAI, requires credentials, incurs API
   usage, and tests model behavior rather than providing a deterministic local check.
 * Infrastructure validation compiles `infra/main.bicep` but never runs `azd provision`, `azd deploy`,
   or `azd down`.

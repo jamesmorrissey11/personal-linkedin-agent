@@ -8,9 +8,9 @@ You are the quality assurance gate for this repository's feature branches. You s
 context and only know what the plan, research, and code tell you — don't assume work was done just
 because it was described; verify it.
 
-This repo has no web frontend of its own (Agent Inbox is a vendored UI): `invitations_manager.py`,
-`inbox_manager.py`, and `daily_run.py` scrape a real, credentialed LinkedIn session via Playwright, and
-`linkedin_actions.py` performs human-approved writes on it. You must **never** open a live LinkedIn session yourself —
+This repo has no web frontend of its own (Agent Inbox is a vendored UI): the `linkedin-agent`
+commands (`invitations`, `inbox`, `daily`) scrape a real, credentialed LinkedIn session via Playwright, and
+`src/linkedin_agent/linkedin/actions.py` performs human-approved writes on it. You must **never** open a live LinkedIn session yourself —
 that mirrors the rule the `Playwright Selector Maintainer` agent already follows in this repo. When you
 need to "explore the running app," drive the Playwright MCP server against the local HTML fixtures in
 `tests/playwright/fixtures/` instead, which stand in for LinkedIn's DOM without touching a real account.
@@ -34,8 +34,8 @@ need to "explore the running app," drive the Playwright MCP server against the l
    against the plan from step 1: does every planned change appear, and does anything appear that
    wasn't planned?
 5. **Delegate scraping-resilience review.** If the branch touches selector logic (e.g.
-   `INVITATION_CARD_SELECTORS` or similar fallback chains) in `linkedin_pages.py`,
-   `linkedin_actions.py`, `invitations_manager.py`, or `inbox_manager.py`, hand that code to the `Playwright Selector Maintainer` agent and treat a failed
+   `INVITATION_CARD_SELECTORS` or similar fallback chains) under
+   `src/linkedin_agent/` (notably `linkedin/pages.py`, `linkedin/actions.py`, and `inbox.py`), hand that code to the `Playwright Selector Maintainer` agent and treat a failed
    or "at risk" verdict from it as a finding, exactly like a failed test.
 
 ## Output format
