@@ -467,11 +467,13 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
 
         logger.info(f"\nIgnored ({len(ignored)}):")
         for invitation in ignored:
-            logger.info(f"- {invitation.name} ({invitation.job_title})\n  Profile: {invitation.profile}\n  Reason: {invitation.decision.reason}")
+            reason = invitation.decision.reason if invitation.decision else "unknown"
+            logger.info(f"- {invitation.name} ({invitation.job_title})\n  Profile: {invitation.profile}\n  Reason: {reason}")
 
         logger.info(f"\nUndecided ({len(undecided)}):")
         for invitation in undecided:
-            logger.info(f"- {invitation.name} ({invitation.job_title}) {invitation.profile}\n  Reason: {invitation.decision.reason}")
+            reason = invitation.decision.reason if invitation.decision else "unknown"
+            logger.info(f"- {invitation.name} ({invitation.job_title}) {invitation.profile}\n  Reason: {reason}")
 
         # Close the browser
         await browser.close()
