@@ -151,6 +151,17 @@ Azure setup at all as long as Ollama is installed and running locally.
     OLLAMA_MODEL=gemma3:latest
     ```
 
+   Every LLM call (both scripts, all backends) is bounded so a model that gets stuck generating can't
+   stall the run. Override the defaults in `.env` if needed:
+
+    | Variable | Default | Effect |
+    |---|---|---|
+    | `LLM_MAX_TOKENS` | `512` | Maximum output tokens per call. |
+    | `LLM_TIMEOUT_SECONDS` | `60` | Per-request timeout. The OpenAI SDK retries timeouts twice, so the worst case is ~3× this. |
+
+   When a call fails, `inbox_manager.py` gives that conversation an urgency score of 1, and
+   `invitations_manager.py` leaves that invitation pending and moves on.
+
 **Known caveat:** Gemma 3's structured-output reliability through Ollama's OpenAI-compatible API is not
 as consistent as larger frontier models — in local testing against `linkedin_invitation_cases.yaml`
 (via `uv run python evals.py`), correctness scores varied between 80–100% across four separate runs with

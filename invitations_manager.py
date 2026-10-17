@@ -20,6 +20,7 @@ from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
 from rich.logging import RichHandler
 
 # Setup logging with rich
@@ -42,6 +43,14 @@ load_dotenv()
 MODEL_BACKEND = os.environ.get("MODEL_BACKEND", "ollama")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:latest")
+
+# Bound every LLM call so a small local model stuck generating (Ollama runs with --context-shift, so it
+# never hits the context limit) can't stall the run. The OpenAI SDK retries timeouts twice, so the
+# worst case per call is roughly 3x LLM_TIMEOUT_SECONDS.
+LLM_MODEL_SETTINGS = ModelSettings(
+    max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "512")),
+    timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "60")),
+)
 
 
 def build_ollama_model() -> OllamaModel:
@@ -118,6 +127,7 @@ def build_agent(backend: str) -> Agent:
         build_model(backend),
         system_prompt=INVITATION_DECISION_SYSTEM_PROMPT,
         output_type=NativeOutput(InvitationDecision),
+        model_settings=LLM_MODEL_SETTINGS,
     )
 
 
@@ -155,6 +165,23 @@ async def run_and_log_agent(case_name: str, input_message: str):
     with out_path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(dataset_dict, f, sort_keys=False, allow_unicode=True)
     return decision
+
+
+async def get_decision(case_name: str, input_message: str, record_eval_cases: bool) -> InvitationDecision | None:
+    """Run the decision agent, returning None (instead of raising) if the LLM call fails or times out."""
+    try:
+        if record_eval_cases:
+            return await run_and_log_agent(case_name, input_message)
+        agent_result = await agent.run(input_message)
+        logger.debug(
+            "%d input tokens, %d output tokens used for decision",
+            agent_result.usage().input_tokens,
+            agent_result.usage().output_tokens,
+        )
+        return agent_result.output
+    except Exception as e:
+        logger.warning(f"Error getting decision for {case_name}: {e!r}")
+        return None
 
 
 async def get_invitation_info(card) -> Invitation | None:
@@ -380,16 +407,12 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
 
                 decision_message = f"Name: {invitation.name}, Job Title: {invitation.job_title}, Profile Link: {invitation.profile}, Connection Info: {invitation.mutual_connections}."
 
-                if record_eval_cases:
-                    decision = await run_and_log_agent(invitation.name, decision_message)
-                else:
-                    agent_result = await agent.run(decision_message)
-                    decision = agent_result.output
-                    logger.debug(
-                        "%d input tokens, %d output tokens used for decision",
-                        agent_result.usage().input_tokens,
-                        agent_result.usage().output_tokens,
-                    )
+                decision = await get_decision(invitation.name, decision_message, record_eval_cases)
+                if decision is None:
+                    # Leave the invitation pending and don't retry it this run.
+                    logger.warning(f"Skipping {invitation.name}; invitation left pending.")
+                    processed_profiles.add(invitation.profile)
+                    continue
                 decision = await execute_action(page, card, decision)
 
                 # If agent is undecided, fetch more information from profile
@@ -397,17 +420,9 @@ async def process_linkedin_invitations(num_to_process: int, record_eval_cases: b
                     logger.info(f"Agent is undecided about {invitation.name}. Fetching profile information...")
                     profile_info = await get_profile_info(page, invitation.profile)
                     detailed_message = f"Full profile information for {invitation.name} ({invitation.job_title}):\n{profile_info}\n\nBased on this additional information, should we accept or ignore this invitation? Provide a reason for your decision."
-                    if record_eval_cases:
-                        decision = await run_and_log_agent(invitation.name, detailed_message)
-                    else:
-                        detailed_result = await agent.run(detailed_message)
-                        decision = detailed_result.output
-                        logger.debug(
-                            "%d input tokens, %d output tokens used for decision",
-                            detailed_result.usage().input_tokens,
-                            detailed_result.usage().output_tokens,
-                        )
-                    decision = await execute_action(page, card, decision)
+                    detailed_decision = await get_decision(invitation.name, detailed_message, record_eval_cases)
+                    if detailed_decision is not None:
+                        decision = await execute_action(page, card, detailed_decision)
                     logger.info(f"Agent's final decision for {invitation.name}: {decision.action} - {getattr(decision, 'reason', '')}")
 
                 invitation.decision = decision
