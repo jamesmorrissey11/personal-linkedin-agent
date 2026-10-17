@@ -13,6 +13,7 @@ from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
 from rich.logging import RichHandler
 
 # Setup logging with rich
@@ -28,6 +29,14 @@ load_dotenv()
 MODEL_BACKEND = os.environ.get("MODEL_BACKEND", "ollama")
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma3:latest")
+
+# Bound every LLM call so a small local model stuck generating (Ollama runs with --context-shift, so it
+# never hits the context limit) can't stall the run. The OpenAI SDK retries timeouts twice, so the
+# worst case per call is roughly 3x LLM_TIMEOUT_SECONDS.
+LLM_MODEL_SETTINGS = ModelSettings(
+    max_tokens=int(os.environ.get("LLM_MAX_TOKENS", "512")),
+    timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "60")),
+)
 
 
 def build_ollama_model() -> OllamaModel:
@@ -163,6 +172,7 @@ For each message, provide:
         model,
         system_prompt=system_prompt,
         output_type=NativeOutput(MessageRanking),
+        model_settings=LLM_MODEL_SETTINGS,
     )
 
 
