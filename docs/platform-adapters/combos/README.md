@@ -63,7 +63,7 @@ Where:
 **Examples:**
 - `github-copilot-github-github-actions.md` — GitHub Copilot + GitHub Issues + GitHub Actions
 
-**About the ci-cd segment in v1:** the `platform-adapters/ci-cd/` layer is a planned v2 expansion — only a placeholder `README.md` ships today, and no per-system adapter directories (e.g., `ci-cd/github-actions/`) exist yet. The currently-shipped Stub combos use the eventual slug `github-actions` as a forward-looking placeholder, documenting CI/CD as manual setup steps until the layer adapters ship. Once the ci-cd layer adapters are in place (v2), new combos can either reference a real ci-cd slug or use `none` to mark that the combo is intentionally CI/CD-agnostic:
+**About the ci-cd segment in v1:** the `docs/platform-adapters/ci-cd/` layer is a planned v2 expansion — only a placeholder `README.md` ships today, and no per-system adapter directories (e.g., `ci-cd/github-actions/`) exist yet. The currently-shipped Stub combos use the eventual slug `github-actions` as a forward-looking placeholder, documenting CI/CD as manual setup steps until the layer adapters ship. Once the ci-cd layer adapters are in place (v2), new combos can either reference a real ci-cd slug or use `none` to mark that the combo is intentionally CI/CD-agnostic:
 - `github-copilot-github-none.md` _(future: combo that explicitly skips ci-cd configuration)_
 
 ## Combo File Structure

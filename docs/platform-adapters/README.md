@@ -13,7 +13,7 @@ Agentic-Agile is platform-agnostic by design. The adapter system bridges the gen
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                 platform-adapters/combos/                       │
+│                 docs/platform-adapters/combos/                       │
 │         (e.g. github-copilot-github-github-actions.md)          │
 │   Assembled, tested combination of all three layers             │
 └───────────┬─────────────────┬─────────────────────┬────────────┘
@@ -50,14 +50,14 @@ Agentic-Agile is platform-agnostic by design. The adapter system bridges the gen
 
 ### Adding an agent-tools adapter
 
-1. Create `platform-adapters/agent-tools/<tool-name>/` directory.
+1. Create `docs/platform-adapters/agent-tools/<tool-name>/` directory.
 2. Add the three required files described in [agent-tools/README.md](agent-tools/README.md): `README.md`, a target-named template file (named after the literal filename your agent reads — e.g., `copilot-instructions.md`), and `quickstart.md`.
-3. Update `platform-adapters/agent-tools/README.md` to list the new adapter in the Available Adapters table.
+3. Update `docs/platform-adapters/agent-tools/README.md` to list the new adapter in the Available Adapters table.
 4. Open a PR — include a working example project demonstrating the adapter.
 
 ### Adding an issue-trackers adapter
 
-1. Create `platform-adapters/issue-trackers/<tracker-name>/` directory.
+1. Create `docs/platform-adapters/issue-trackers/<tracker-name>/` directory.
 2. Add a `README.md` and the tracker-specific story template (e.g., a `quickstart.md` plus any tracker-native template format) following the format in [issue-trackers/README.md](issue-trackers/README.md).
 3. Open a PR with screenshots or export examples showing the template in use.
 
@@ -68,7 +68,7 @@ The ci-cd layer is planned for v2. See [ci-cd/README.md](ci-cd/README.md) for wh
 ### Adding a combo
 
 1. Verify all constituent adapters exist (agent-tools and issue-trackers — the ci-cd layer is v2/planned, so use the convention in [combos/README.md](combos/README.md) for the ci-cd segment).
-2. Create `platform-adapters/combos/<agent-tool>-<issue-tracker>-<ci-cd>.md`.
+2. Create `docs/platform-adapters/combos/<agent-tool>-<issue-tracker>-<ci-cd>.md`.
 3. Follow the combo format and declare a status tier (Maintained, Community, or Stub).
 4. See [combos/README.md](combos/README.md) for full format and status tier definitions.
 

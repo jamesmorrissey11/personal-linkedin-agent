@@ -10,7 +10,7 @@ This repository has two stacks that require different validation commands:
 | Stack | Relevant files | Automatic checks |
 |---|---|---|
 | Python application | `*.py`, `tests/**`, `pyproject.toml`, `requirements*.txt` | Ruff lint, Ruff format check, pytest |
-| Azure infrastructure | `infra/**`, `azure.yaml`, `.github/workflows/azure-dev.yaml` | Bicep compilation, parameter JSON parsing, shell syntax, optional PowerShell syntax |
+| Azure infrastructure | `deploy/azure/**`, `.github/workflows/azure-dev.yaml` | Bicep compilation, parameter JSON parsing, shell syntax, optional PowerShell syntax |
 
 The hooks below adapt the
 [Advanced Copilot CLI lifecycle-hooks exercise](https://awesome-copilot.github.com/learning-hub/advanced-copilot-cli/04-lifecycle-hooks/)
@@ -25,7 +25,7 @@ The hooks perform local, non-destructive validation only:
 * Python formatting is checked with `ruff format --check`; the hook does not rewrite files.
 * `python -m evals.run` is intentionally excluded. It calls Azure OpenAI, requires credentials, incurs API
   usage, and tests model behavior rather than providing a deterministic local check.
-* Infrastructure validation compiles `infra/main.bicep` but never runs `azd provision`, `azd deploy`,
+* Infrastructure validation compiles `deploy/azure/infra/main.bicep` but never runs `azd provision`, `azd deploy`,
   or `azd down`.
 * PowerShell syntax is checked when `pwsh` is available. It is reported as skipped otherwise, allowing
   the checks to run on macOS environments without PowerShell.
@@ -62,7 +62,7 @@ stack_for_file() {
     *.py|pyproject.toml|requirements.txt|requirements-dev.txt)
       echo python
       ;;
-    infra/*|azure.yaml|.github/workflows/azure-dev.yaml)
+    deploy/azure/*|.github/workflows/azure-dev.yaml)
       echo infra
       ;;
   esac
@@ -141,29 +141,29 @@ run_infra_checks() {
   output=$(
     {
       if command -v az >/dev/null 2>&1; then
-        echo "+ az bicep build --file infra/main.bicep --stdout"
-        az bicep build --file infra/main.bicep --stdout >/dev/null
+        echo "+ az bicep build --file deploy/azure/infra/main.bicep --stdout"
+        az bicep build --file deploy/azure/infra/main.bicep --stdout >/dev/null
         bicep_status=$?
       else
-        echo "Azure CLI is unavailable; infra/main.bicep could not be compiled."
+        echo "Azure CLI is unavailable; deploy/azure/infra/main.bicep could not be compiled."
         bicep_status=1
       fi
 
       echo
-      echo "+ jq empty infra/main.parameters.json"
-      jq empty infra/main.parameters.json
+      echo "+ jq empty deploy/azure/infra/main.parameters.json"
+      jq empty deploy/azure/infra/main.parameters.json
       parameters_status=$?
 
       echo
-      echo "+ bash -n infra/write_dot_env.sh"
-      bash -n infra/write_dot_env.sh
+      echo "+ bash -n deploy/azure/infra/write_dot_env.sh"
+      bash -n deploy/azure/infra/write_dot_env.sh
       shell_status=$?
 
       echo
       if command -v pwsh >/dev/null 2>&1; then
-        echo "+ PowerShell syntax check: infra/write_dot_env.ps1"
+        echo "+ PowerShell syntax check: deploy/azure/infra/write_dot_env.ps1"
         pwsh -NoProfile -NonInteractive -Command \
-          "[void][scriptblock]::Create((Get-Content -Raw 'infra/write_dot_env.ps1'))"
+          "[void][scriptblock]::Create((Get-Content -Raw 'deploy/azure/infra/write_dot_env.ps1'))"
         powershell_status=$?
       else
         echo "PowerShell syntax check skipped because pwsh is unavailable."

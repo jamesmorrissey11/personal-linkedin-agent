@@ -19,11 +19,11 @@ This repository is built on the **Agentic-Agile Template** — a starter framewo
 |------|---------|
 | `AGENTS.md` | **This file.** Universal agent entry point and onboarding orchestrator. |
 | `README.md` | Human-facing project overview and getting-started guide. |
-| `MANIFESTO.md` | The Agentic-Agile Manifesto: 5 values and 13 principles for human-agent development. |
-| `STYLE.md` | Code conventions, commit message format, PR structure, documentation standards. |
+| `docs/MANIFESTO.md` | The Agentic-Agile Manifesto: 5 values and 13 principles for human-agent development. |
+| `docs/STYLE.md` | Code conventions, commit message format, PR structure, documentation standards. |
 | `CONTRIBUTING.md` | Human contribution workflow and PR guidelines. |
 | `SECURITY.md` | Security policy and vulnerability reporting process. |
-| `platform-adapters/` | **Layered agent / tracker / CI-CD context.** Three sub-layers: `agent-tools/` (one adapter per AI agent), `issue-trackers/` (one per backlog system), `ci-cd/` (planned v2), plus `combos/` for pre-assembled stacks. |
+| `docs/platform-adapters/` | **Layered agent / tracker / CI-CD context.** Three sub-layers: `agent-tools/` (one adapter per AI agent), `issue-trackers/` (one per backlog system), `ci-cd/` (planned v2), plus `combos/` for pre-assembled stacks. |
 | `docs/agentic-agile/agent-surface-selection.md` | Guide to choosing the right agent surface for different task types. |
 | `docs/agentic-agile/evaluation-framework.md` | Eight-dimension framework for measuring human-agent partnership effectiveness. |
 | `docs/agentic-agile/epic-decomposition-example.md` | Worked example: decompose an epic into stories, assign file ownership, plan waves. |
@@ -39,11 +39,11 @@ You are an AI coding agent working within this repository. Your responsibilities
 
 In all states, apply these baseline behaviors:
 
-- **Read context first.** Locate and read your platform adapter in `platform-adapters/` before starting any task. Platform adapters contain project-specific context, coding conventions, build commands, and testing strategy.
+- **Read context first.** Locate and read your platform adapter in `docs/platform-adapters/` before starting any task. Platform adapters contain project-specific context, coding conventions, build commands, and testing strategy.
 - **Respect scope.** Implement exactly what the story or task specifies. Do not add features not in scope. Do not modify files outside your assignment without explicit instruction.
 - **Ask before assuming.** When requirements are ambiguous, ask. Never guess on incomplete specifications.
 - **Keep changes minimal.** Prefer targeted, focused changes over broad refactoring unless the spec requires it.
-- **Follow conventions.** Consult `STYLE.md` for code style, commit format, and PR structure.
+- **Follow conventions.** Consult `docs/STYLE.md` for code style, commit format, and PR structure.
 
 **This role is additive.** You complement the human's judgment and domain knowledge. You do not replace it. At decision points where business context, stakeholder priorities, or architectural trade-offs are required, surface the question to the human rather than deciding unilaterally.
 
@@ -64,7 +64,7 @@ Check the title of this file (the first `#` heading):
 
 ### Quick Start (Configured State)
 
-1. Find your platform adapter: `platform-adapters/agent-tools/<your-tool>/`.
+1. Find your platform adapter: `docs/platform-adapters/agent-tools/<your-tool>/`.
 2. Read the adapter completely — it contains project-specific context, build commands, and conventions.
 3. Read your assigned story or task, including acceptance criteria, file scope, and constraints.
 4. Confirm you understand the scope before writing any code.
@@ -112,7 +112,7 @@ Ask the following questions **one at a time**. Wait for each answer before askin
 
 **Input 1 — Project name:**
 
-> "What is the name of your project? This will replace the title placeholder in `AGENTS.md` and `platform-adapters/` context files."
+> "What is the name of your project? This will replace the title placeholder in `AGENTS.md` and `docs/platform-adapters/` context files."
 
 *(Required. Cannot be deferred.)*
 
@@ -174,10 +174,10 @@ After both commits are complete, say:
 
 > "Setup complete. Here's what to do next:
 >
-> 1. Open your platform adapter in `platform-adapters/agent-tools/<your-tool>/` and fill in any remaining placeholders (directory structure, build commands, testing strategy).
+> 1. Open your platform adapter in `docs/platform-adapters/agent-tools/<your-tool>/` and fill in any remaining placeholders (directory structure, build commands, testing strategy).
 > 2. Share that adapter file with your agent at the start of each session.
 > 3. Use `.github/ISSUE_TEMPLATE/agentic-story.md` when creating your first story — it structures scope and acceptance criteria in the format agents work best with.
-> 4. Review `MANIFESTO.md` with your team to align on the human-agent collaboration principles.
+> 4. Review `docs/MANIFESTO.md` with your team to align on the human-agent collaboration principles.
 >
 > From this point forward, agents reading this repository will enter **configured state** and go directly to the Quick Start path."
 
@@ -188,8 +188,8 @@ After both commits are complete, say:
 Before closing the onboarding session, verify:
 
 - [ ] The title of `AGENTS.md` contains the real project name (not the template sentinel).
-- [ ] At least one platform adapter exists under `platform-adapters/` for each confirmed agent tool.
-- [ ] The issue tracker is documented in the adapter under `platform-adapters/issue-trackers/<tracker>/`.
+- [ ] At least one platform adapter exists under `docs/platform-adapters/` for each confirmed agent tool.
+- [ ] The issue tracker is documented in the adapter under `docs/platform-adapters/issue-trackers/<tracker>/`.
 - [ ] CI/CD configuration is documented or marked TBD.
 - [ ] Both baseline and customization commits are present in git history.
 - [ ] No template placeholder text remains in the files that were customized.

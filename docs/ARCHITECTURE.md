@@ -32,8 +32,8 @@ All Python code lives in one installable package, `src/linkedin_agent/`, run thr
 |---|---|
 | `src/linkedin_agent/invitations.py` (`linkedin-agent invitations`) | Scans pending invitations, asks an `Agent` to propose accept/ignore/undecided for each, and queues every new one for review in Agent Inbox. Also closes reviews for invitations that are no longer pending on LinkedIn. Never clicks Accept or Ignore. See [Running the invitation manager](../README.md#running-the-invitation-manager). |
 | `src/linkedin_agent/inbox.py` (`linkedin-agent inbox`) | Scans conversations until it is caught up, asks a separate `Agent` to score reply urgency (1-10) and suggest a reply, and queues every conversation where the other person spoke last. Also closes reviews for conversations James replied to or archived on LinkedIn. In interactive runs it opens the highest-priority thread. Never writes to LinkedIn. See [Running the inbox manager](../README.md#running-the-inbox-manager). |
-| `src/linkedin_agent/daily.py` (`linkedin-agent daily`) | Unattended daily sync, scheduled by launchd at 06:30 (`scheduling/`): recovers stuck reviews, closes items already handled on LinkedIn, then proposes new items. Read-only on LinkedIn. See [Daily unattended workflow](../README.md#daily-unattended-workflow). |
-| `src/linkedin_agent/review/graphs.py` | The two LangGraph graphs, `invitation_review` and `message_review`, served by `uv run langgraph dev` via `langgraph.json`. Each pauses for a human decision and then runs an `act` node that performs exactly that decision through `linkedin/actions.py`. |
+| `src/linkedin_agent/daily.py` (`linkedin-agent daily`) | Unattended daily sync, scheduled by launchd at 06:30 (`deploy/launchd/`): recovers stuck reviews, closes items already handled on LinkedIn, then proposes new items. Read-only on LinkedIn. See [Daily unattended workflow](../README.md#daily-unattended-workflow). |
+| `src/linkedin_agent/review/graphs.py` | The two LangGraph graphs, `invitation_review` and `message_review`, served by `uv run linkedin-agent server` (`langgraph dev` with `deploy/langgraph.json`). Each pauses for a human decision and then runs an `act` node that performs exactly that decision through `linkedin/actions.py`. |
 | `evals/run.py` (`uv run python -m evals.run`) | Runs `pydantic_evals` regression checks (`CorrectDecisionEvaluator`, `IsInstance`) against the invitation-decision agent using cases from `evals/invitation_cases.yaml`. It evaluates against whatever `MODEL_BACKEND` resolves to (`ollama` by default). Developer-only; not part of the package. |
 
 ### Shared modules
@@ -90,14 +90,15 @@ Azure client construction is lazy (inside `build_azure_model()`), so importing e
 
 ### Data layer
 
-No database. All state is file-based:
+No database. All state is file-based. Runtime state lives outside the repo, in one per-user folder returned by `linkedin_agent.runtime.state_dir()`: `~/Library/Application Support/linkedin-agent` on macOS, `$XDG_STATE_HOME/linkedin-agent` (default `~/.local/state/linkedin-agent`) elsewhere, or `$LINKEDIN_AGENT_HOME`. Every checkout and worktree therefore shares one login and one Agent Inbox, and nothing generated at runtime lands in the repo (#47).
 
-* `playwright/.auth/state.json` — cached Playwright browser storage state (cookies/session) written after a manual LinkedIn login, so subsequent runs skip re-authenticating. Used by every LinkedIn session through `linkedin.session.open_linkedin`.
-* `playwright/.auth/linkedin.lock` — the cross-process lock that keeps the daily sync, manager runs, and Agent Inbox actions from using LinkedIn at the same time.
-* `.langgraph_api/` — the `langgraph dev` server's store: Agent Inbox review history and the de-duplication state the daily sync relies on. Deleting it brings back handled items. It lives in whichever directory the server starts from, so a server started from another checkout or worktree shows a different inbox (see #47).
+* `browser/state.json` — cached Playwright browser storage state (cookies/session) written after a manual LinkedIn login, so subsequent runs skip re-authenticating. Used by every LinkedIn session through `linkedin.session.open_linkedin`.
+* `browser/linkedin.lock` — the cross-process lock that keeps the daily sync, manager runs, and Agent Inbox actions from using LinkedIn at the same time.
+* `langgraph/.langgraph_api/` — the LangGraph dev server's store: Agent Inbox review history and the de-duplication state the daily sync relies on. Deleting it brings back handled items. `langgraph dev` always writes `.langgraph_api/` to its working directory, so `linkedin-agent server` starts it from `langgraph/` with `--config deploy/langgraph.json` (graphs referenced by module name).
 * `logs/` — `daily_run.log` and launchd output. Disposable.
+* `scripts/migrate_runtime_state.py` moves the pre-#47 in-repo locations (`playwright/.auth/`, `.langgraph_api/`, `logs/`) into this folder without overwriting anything.
 * `evals/invitation_cases.yaml` — eval dataset consumed by `evals/run.py`; also appended to at runtime by `linkedin-agent invitations --record-eval-cases`.
-* `.env` — Azure OpenAI endpoint/deployment config, generated post-provision by `infra/write_dot_env.sh` / `.ps1` (see [Azure Infra Stack](#azure-infra-stack)); also where `MODEL_BACKEND`/`OLLAMA_BASE_URL`/`OLLAMA_MODEL` may optionally be set (these are not `azd`-provisioned outputs, so they are not written by the postprovision hooks).
+* `.env` — Azure OpenAI endpoint/deployment config, generated post-provision by `deploy/azure/infra/write_dot_env.sh` / `.ps1`, which write to the repo-root `.env`; `.env.example` documents every variable (see [Azure Infra Stack](#azure-infra-stack)); also where `MODEL_BACKEND`/`OLLAMA_BASE_URL`/`OLLAMA_MODEL` may optionally be set (these are not `azd`-provisioned outputs, so they are not written by the postprovision hooks).
 
 ### Templates
 
@@ -113,15 +114,15 @@ the committed `uv.lock`. Local, test, evaluation, and application commands run t
 
 ### Purpose
 
-Provisions the Azure OpenAI resource (`gpt-5.5` deployment, per `infra/main.bicep`) that both agent scripts call, using the Azure Developer CLI (`azd`).
+Provisions the Azure OpenAI resource (`gpt-5.5` deployment, per `deploy/azure/infra/main.bicep`) that both workflows call, using the Azure Developer CLI (`azd`). Run `azd` from `deploy/azure/`.
 
 ### Modules
 
-* `azure.yaml` — `azd` project manifest; wires the `postprovision` hooks.
-* `infra/main.bicep` — subscription-scoped: creates a resource group, an Azure OpenAI (Cognitive Services) account with a `gpt-5.5` deployment, and a `Cognitive Services OpenAI User` role assignment.
-* `infra/main.parameters.json` — `azd` parameter bindings for the Bicep template.
-* `infra/write_dot_env.sh` / `.ps1` — `postprovision` hooks that write `AZURE_TENANT_ID`, `AZURE_OPENAI_SERVICE`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_CHAT_DEPLOYMENT`, and `AZURE_OPENAI_CHAT_MODEL` into `.env`.
-* `.github/workflows/azure-dev.yaml` — CI provisioning via `azd provision --no-prompt` on push to `main`, using federated OIDC credentials.
+* `deploy/azure/azure.yaml` — `azd` project manifest; wires the `postprovision` hooks.
+* `deploy/azure/infra/main.bicep` — subscription-scoped: creates a resource group, an Azure OpenAI (Cognitive Services) account with a `gpt-5.5` deployment, and a `Cognitive Services OpenAI User` role assignment.
+* `deploy/azure/infra/main.parameters.json` — `azd` parameter bindings for the Bicep template.
+* `deploy/azure/infra/write_dot_env.sh` / `.ps1` — `postprovision` hooks that write `AZURE_TENANT_ID`, `AZURE_OPENAI_SERVICE`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_CHAT_DEPLOYMENT`, and `AZURE_OPENAI_CHAT_MODEL` into `.env`.
+* `.github/workflows/azure-dev.yaml` — CI provisioning via `azd provision --no-prompt` (in `deploy/azure`) on push to `main`, using federated OIDC credentials.
 * `.github/workflows/template-validation.yaml` — a Microsoft-internal sample-template validation check, inherited from the upstream `Azure-Samples/python-ai-agent-frameworks-demos` template this repo was forked from. Its own header comment says it can be deleted in forks; recommend removing it as part of a future cleanup pass (not done here, to avoid touching CI behavior).
 
 ## Known Issues / Tech Debt

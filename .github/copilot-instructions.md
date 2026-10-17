@@ -18,10 +18,10 @@ There is no frontend/backend split or database. The Python code is one installab
 | `src/linkedin_agent/cli.py` | The `linkedin-agent` command (`[project.scripts]`): `invitations`, `inbox`, and `daily` subcommands. Loads `.env` and sets up logging at startup; nothing happens at import. |
 | `src/linkedin_agent/invitations.py` | Invitation workflow: scrapes invitation cards, runs a `pydantic_ai.Agent` to propose accept/ignore/undecided, and queues every new invitation for mandatory review. Falls back to loading the full profile page when undecided. |
 | `src/linkedin_agent/inbox.py` | Inbox workflow: scans conversations until caught up, runs a separate `Agent` to score reply urgency (1-10) and suggest a reply, queues conversations where someone else spoke last, and opens the highest-priority thread in interactive runs. |
-| `src/linkedin_agent/daily.py` | Sync-only unattended orchestrator (recover/retire → close handled → propose → summary). It never writes to LinkedIn and exits non-zero on expired login/health failure. launchd templates live in `scheduling/`. |
+| `src/linkedin_agent/daily.py` | Sync-only unattended orchestrator (recover/retire → close handled → propose → summary). It never writes to LinkedIn and exits non-zero on expired login/health failure. launchd templates live in `deploy/launchd/`. |
 | `src/linkedin_agent/llm.py` | Every model backend (`ollama`, `openai`, `azure`, `fallback`), with the two preserved Azure client variants. `runtime.py` holds shared errors, `ReviewCounts`, logging setup, and `notify`. |
 | `src/linkedin_agent/linkedin/` | Everything that touches Playwright/LinkedIn: `models.py`, `session.py` (cached-login context, cross-process lock), `pages.py` (read-only selectors/helpers), `guard.py` (default-deny write guard, `safe_click`, single-use `ApprovedAction`), and `actions.py` (the only mutation module: one explicitly approved accept/ignore/send/archive). |
-| `src/linkedin_agent/review/` | Everything that touches LangGraph/Agent Inbox: `graphs.py` (graphs `invitation_review` and `message_review`, served by `uv run langgraph dev --no-reload` via `langgraph.json`, which interrupt for review and then call `linkedin/actions.py`) and `queue.py` (the SDK client). The Agent Inbox UI lives in the `agent-inbox/` git submodule (excluded from ruff). |
+| `src/linkedin_agent/review/` | Everything that touches LangGraph/Agent Inbox: `graphs.py` (graphs `invitation_review` and `message_review`, served by `uv run linkedin-agent server` via `deploy/langgraph.json`, which interrupt for review and then call `linkedin/actions.py`) and `queue.py` (the SDK client). The Agent Inbox UI lives in the `deploy/agent-inbox/` git submodule (James's fork; excluded from ruff). |
 | `evals/run.py` | `pydantic_evals` regression checks (`CorrectDecisionEvaluator`, `IsInstance`) against the invitation-decision agent, using `evals/invitation_cases.yaml`. Developer-only; not part of the package. |
 
 Run them with `uv run`, e.g.:
@@ -32,6 +32,21 @@ uv run linkedin-agent inbox --num-messages 20
 uv run linkedin-agent daily --headless
 uv run python -m evals.run
 ```
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `src/linkedin_agent/` | All application code (the only code that runs) |
+| `tests/` | Unit and fixture-based Playwright tests |
+| `evals/` | Developer-only LLM evals |
+| `scripts/` | One-off developer scripts (fixture capture, runtime-state migration) |
+| `deploy/` | How it runs: `langgraph.json` (server config), `launchd/` (scheduled jobs), `azure/` (`azd` provisioning: `azure.yaml`, `infra/`), and the `agent-inbox/` UI submodule |
+| `docs/` | Architecture, testing, style, the Agentic-Agile manifesto, platform adapters, and design specs/plans |
+
+Runtime state (LinkedIn session, lock, Agent Inbox data, logs) never lives in the repo: see `linkedin_agent.runtime.state_dir()`
+(`~/Library/Application Support/linkedin-agent` on macOS, override with `LINKEDIN_AGENT_HOME`). Don't add code that writes
+files relative to the working directory; use the `runtime` folder helpers.
 
 ## Safety invariant
 
@@ -49,7 +64,7 @@ automatically for matching files — don't duplicate them here:
 | File | Applies to | Covers |
 |---|---|---|
 | `instructions/python.instructions.md` | `**/*.py` | Package layout, import-time rules, the preserved Azure client variants, inline-prompt/LLM-judgment conventions, session-state file, scraping fallback chains, ruff lint/format, evals usage |
-| `instructions/infra.instructions.md` | `infra/**` | Bicep resource scope, keeping `write_dot_env.sh`/`.ps1` in sync, not running `azd provision`/`azd down` unprompted |
+| `instructions/infra.instructions.md` | `deploy/azure/**` | Bicep resource scope, keeping `write_dot_env.sh`/`.ps1` in sync, not running `azd provision`/`azd down` unprompted |
 | `instructions/markdown.instructions.md` | `**/*.md` | Formatting generated Markdown for the Clearance macOS app |
 
 ## Organizing Copilot customizations across repos

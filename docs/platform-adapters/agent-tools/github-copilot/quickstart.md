@@ -20,7 +20,7 @@ Copy `copilot-instructions.md` from this directory to `.github/` in your reposit
 
 ```bash
 mkdir -p /path/to/your-repo/.github
-cp platform-adapters/agent-tools/github-copilot/copilot-instructions.md /path/to/your-repo/.github/copilot-instructions.md
+cp docs/platform-adapters/agent-tools/github-copilot/copilot-instructions.md /path/to/your-repo/.github/copilot-instructions.md
 ```
 
 ### 2. Replace placeholder content

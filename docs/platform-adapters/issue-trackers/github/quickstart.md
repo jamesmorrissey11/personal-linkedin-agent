@@ -46,6 +46,6 @@ Changes take effect immediately — GitHub reads the file from the repository on
 
 ## Why This Adapter Exists
 
-Other issue-tracker adapters (Jira, Azure DevOps, Linear) require copying a template file and configuring custom fields. GitHub Issues requires neither. This adapter entry exists for consistency with the rest of the `platform-adapters/issue-trackers/` directory so teams evaluating multiple trackers find the same documentation structure everywhere.
+Other issue-tracker adapters (Jira, Azure DevOps, Linear) require copying a template file and configuring custom fields. GitHub Issues requires neither. This adapter entry exists for consistency with the rest of the `docs/platform-adapters/issue-trackers/` directory so teams evaluating multiple trackers find the same documentation structure everywhere.
 
 The canonical template lives at `.github/ISSUE_TEMPLATE/agentic-story.md` — that file is the single source of truth for the agentic-story format on GitHub.
