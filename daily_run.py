@@ -14,6 +14,7 @@ from pathlib import Path
 
 import inbox_manager
 import invitations_manager
+from linkedin_guard import blocked_write_summary
 from unattended import HealthCheckError, LoginRequiredError, ReviewCounts, notify
 
 logger = logging.getLogger("daily_run")
@@ -80,6 +81,8 @@ async def run(mode: str, headless: bool) -> int:
         if "propose" in name:
             proposed = proposed + counts
 
+    if blocked := blocked_write_summary():
+        warnings.append(blocked)
     summary = build_summary(proposed, warnings)
     logger.info("Summary: %s", summary)
     if mode == "full" or warnings:

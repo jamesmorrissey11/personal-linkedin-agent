@@ -3,6 +3,7 @@ applyTo: "*.py"
 description: Conventions, client-setup pitfalls, lint/format, and test invocation for the Python CLI scripts (invitations_manager.py, inbox_manager.py, evals.py)
 ---
 
+- **Safety invariant: no LinkedIn message is ever sent, deleted, archived, reported, blocked, or left without explicit human approval.** Do not add message-write capability. Route every click through `linkedin_guard.safe_click`, install `install_linkedin_write_guard` on every Playwright context, never type or press keys in a composer, and give LLM agents no tools. If sending is ever added it needs per-message approval bound to the conversation URL and the SHA-256 of the exact final text, single use, expiring, and interactive-only; any mismatch fails closed. `tests/unit/test_no_message_writes.py` enforces this in CI.
 - Critical inconsistency — do not copy `inbox_manager.py`'s Azure OpenAI client setup:
   `invitations_manager.py` uses `base_url=AZURE_OPENAI_ENDPOINT + "/openai/v1"` and async
   `azure.identity.aio.AzureDeveloperCliCredential`; `inbox_manager.py` uses
