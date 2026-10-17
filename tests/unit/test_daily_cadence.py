@@ -7,7 +7,7 @@ import linkedin_pages
 from inbox_manager import ConversationMessage, InboxMessage
 from invitations_manager import Invitation, InvitationAction, InvitationDecision
 from review_graph import decision_from_response, message_result_from_response
-from review_queue import classify_review, fetch_pending_reviews, fetch_resolved_reviews, find_review, supersede_review
+from review_queue import classify_review, fetch_pending_reviews, fetch_resolved_reviews, find_pending_review, supersede_review
 from tests.async_helpers import run_async_test
 from unattended import HealthCheckError, ReviewCounts
 
@@ -60,10 +60,10 @@ def test_pending_reviews_maps_key_to_thread():
     assert run_async_test(lambda: fetch_pending_reviews(client, "graph")) == {"k1": "a"}
 
 
-def test_find_review_and_classification():
-    client = FakeClient([{"thread_id": "a", "metadata": {"applied": True, "outcome": "superseded"}}])
-    assert run_async_test(lambda: find_review(client, "graph", "k"))["thread_id"] == "a"
-    assert run_async_test(lambda: find_review(FakeClient(), "graph", "k")) is None
+def test_find_pending_review_and_classification():
+    assert run_async_test(lambda: find_pending_review(FakeClient([{"thread_id": "a", "metadata": {}}]), "graph", "k"))["thread_id"] == "a"
+    assert run_async_test(lambda: find_pending_review(FakeClient([{"thread_id": "a", "metadata": {"applied": True, "outcome": "superseded"}}]), "graph", "k")) is None
+    assert run_async_test(lambda: find_pending_review(FakeClient(), "graph", "k")) is None
     assert classify_review({"metadata": {"applied": True, "outcome": "superseded"}}) == "superseded"
     assert classify_review({"metadata": {"applied": True}}) == "applied"
     assert classify_review({"metadata": {}}) == "already_queued"
@@ -130,8 +130,9 @@ def invitation_page(monkeypatch):
     monkeypatch.setattr(invitations_manager.asyncio, "sleep", no_sleep)
 
 
-def test_known_invitations_skip_llm_and_are_counted_separately(monkeypatch, invitation_page):
-    existing = {"p1": {"metadata": {}}, "p2": {"metadata": {"applied": True}}, "p3": {"metadata": {"applied": True, "outcome": "superseded"}}}
+def test_pending_invitations_skip_llm_and_closed_ones_are_requeued(monkeypatch, invitation_page):
+    # find_pending_review only returns pending threads; closed ones (p2) come back as new items.
+    existing = {"p1": {"metadata": {}}}
     llm_calls = []
 
     async def fake_find(client, graph_id, key):
@@ -144,14 +145,14 @@ def test_known_invitations_skip_llm_and_are_counted_separately(monkeypatch, invi
     async def fake_enqueue(client, graph_id, key, data):
         return True
 
-    monkeypatch.setattr(invitations_manager, "find_review", fake_find)
+    monkeypatch.setattr(invitations_manager, "find_pending_review", fake_find)
     monkeypatch.setattr(invitations_manager, "try_decision", fake_decision)
     monkeypatch.setattr(invitations_manager, "enqueue_review", fake_enqueue)
 
-    _, counts = run_async_test(lambda: invitations_manager.propose_new_invitations(FakePage(["new1", "p1", "p2", "p3"]), object(), 100, False, True))
+    _, counts = run_async_test(lambda: invitations_manager.propose_new_invitations(FakePage(["new1", "p1", "p2"]), object(), 100, False, True))
 
-    assert llm_calls == ["new1"]
-    assert (counts.new, counts.already_queued, counts.applied, counts.superseded) == (1, 1, 1, 1)
+    assert llm_calls == ["new1", "p2"]
+    assert (counts.new, counts.already_queued, counts.applied, counts.superseded) == (2, 1, 0, 0)
 
 
 def test_second_run_with_no_changes_creates_nothing(monkeypatch, invitation_page):
@@ -161,7 +162,7 @@ def test_second_run_with_no_changes_creates_nothing(monkeypatch, invitation_page
     async def unexpected(*args, **kwargs):
         raise AssertionError("known items must not hit the LLM or the queue")
 
-    monkeypatch.setattr(invitations_manager, "find_review", fake_find)
+    monkeypatch.setattr(invitations_manager, "find_pending_review", fake_find)
     monkeypatch.setattr(invitations_manager, "try_decision", unexpected)
     monkeypatch.setattr(invitations_manager, "enqueue_review", unexpected)
 
@@ -189,7 +190,7 @@ def test_failed_and_undecided_invitations_are_queued_for_judgment(monkeypatch, i
         queued[key] = data
         return True
 
-    monkeypatch.setattr(invitations_manager, "find_review", no_existing)
+    monkeypatch.setattr(invitations_manager, "find_pending_review", no_existing)
     monkeypatch.setattr(invitations_manager, "try_decision", fake_decision)
     monkeypatch.setattr(invitations_manager, "get_profile_info", fake_profile)
     monkeypatch.setattr(invitations_manager, "enqueue_review", fake_enqueue)
@@ -211,7 +212,7 @@ def test_safety_cap_is_reported(monkeypatch, invitation_page):
     async def fake_enqueue(client, graph_id, key, data):
         return True
 
-    monkeypatch.setattr(invitations_manager, "find_review", no_existing)
+    monkeypatch.setattr(invitations_manager, "find_pending_review", no_existing)
     monkeypatch.setattr(invitations_manager, "try_decision", fake_decision)
     monkeypatch.setattr(invitations_manager, "enqueue_review", fake_enqueue)
 

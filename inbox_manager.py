@@ -29,7 +29,7 @@ from linkedin_pages import (  # noqa: F401  (unused names are re-exported for ex
     open_linkedin,
 )
 from review_graph import MESSAGE_GRAPH_ID
-from review_queue import classify_review, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_review, get_review_client, mark_applied, supersede_review
+from review_queue import classify_review, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_pending_review, get_review_client, mark_applied, supersede_review
 from unattended import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts
 
 # Setup logging with rich
@@ -434,7 +434,7 @@ async def manage_linkedin_inbox(
 
         async def known_check(message: InboxMessage) -> str | None:
             latest = message.last_three_messages[-1].content if message.last_three_messages else ""
-            existing = await find_review(review_client, MESSAGE_GRAPH_ID, message_key(message.conversation_url, latest))
+            existing = await find_pending_review(review_client, MESSAGE_GRAPH_ID, message_key(message.conversation_url, latest))
             return classify_review(existing) if existing else None
 
         messages, cap_hit = await get_inbox_messages(page, num_messages, logged_in_user, known_check)

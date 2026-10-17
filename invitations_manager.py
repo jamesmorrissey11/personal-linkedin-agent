@@ -37,7 +37,7 @@ from linkedin_pages import (  # noqa: F401  (unused names are re-exported for ex
     page_reports_no_invitations,
 )
 from review_graph import GRAPH_ID
-from review_queue import classify_review, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_review, get_review_client, mark_applied, supersede_review
+from review_queue import classify_review, enqueue_review, fetch_pending_reviews, fetch_resolved_reviews, find_pending_review, get_review_client, mark_applied, supersede_review
 from unattended import KNOWN_STREAK_STOP, HealthCheckError, ReviewCounts
 
 # Setup logging with rich
@@ -388,7 +388,7 @@ async def propose_new_invitations(page: Page, review_client, num_to_process: int
             seen_profiles.add(invitation.profile)
             new_card_seen = True
 
-            existing = await find_review(review_client, GRAPH_ID, invitation.profile)
+            existing = await find_pending_review(review_client, GRAPH_ID, invitation.profile)
             if existing:
                 # Known item: no LLM call, and it must not count toward the processing cap.
                 bucket = classify_review(existing)
