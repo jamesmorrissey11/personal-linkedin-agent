@@ -1,0 +1,159 @@
+diff --git a/src/components/agent-inbox/components/add-agent-inbox-dialog.tsx b/src/components/agent-inbox/components/add-agent-inbox-dialog.tsx
+index 259b861..4b49977 100644
+--- a/src/components/agent-inbox/components/add-agent-inbox-dialog.tsx
++++ b/src/components/agent-inbox/components/add-agent-inbox-dialog.tsx
+@@ -20,7 +20,11 @@ import {
+   LANGCHAIN_API_KEY_LOCAL_STORAGE_KEY,
+ } from "../constants";
+ import { PasswordInput } from "@/components/ui/password-input";
+-import { isDeployedUrl, fetchDeploymentInfo } from "../utils";
++import {
++  isDeployedUrl,
++  fetchDeploymentInfo,
++  normalizeDeploymentUrl,
++} from "../utils";
+ import { useLocalStorage } from "../hooks/use-local-storage";
+ import { LoaderCircle } from "lucide-react";
+ import { logger } from "../utils/logger";
+@@ -46,7 +50,7 @@ export function AddAgentInboxDialog({
+   const { getItem } = useLocalStorage();
+   const [open, setOpen] = React.useState(false);
+   const [graphId, setGraphId] = React.useState("");
+-  const [deploymentUrl, setDeploymentUrl] = React.useState("");
++  const [rawDeploymentUrl, setDeploymentUrl] = React.useState("");
+   const [name, setName] = React.useState("");
+   const [isSubmitting, setIsSubmitting] = React.useState(false);
+   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+@@ -72,6 +76,16 @@ export function AddAgentInboxDialog({
+     setErrorMessage(null);
+ 
+     try {
++      const deploymentUrl = normalizeDeploymentUrl(rawDeploymentUrl);
++      try {
++        new URL(deploymentUrl);
++      } catch {
++        setErrorMessage(
++          "Please enter a valid deployment URL, e.g. http://localhost:2024"
++        );
++        setIsSubmitting(false);
++        return;
++      }
+       const isDeployed = isDeployedUrl(deploymentUrl);
+       let inboxId = uuidv4();
+       let fetchedTenantId: string | undefined | null = undefined;
+@@ -166,7 +180,9 @@ export function AddAgentInboxDialog({
+     }
+   };
+ 
+-  const isDeployedGraph = isDeployedUrl(deploymentUrl);
++  const isDeployedGraph = isDeployedUrl(
++    normalizeDeploymentUrl(rawDeploymentUrl)
++  );
+   const showLangChainApiKeyField =
+     (noInboxesFoundParam === "true" || isDeployedGraph) &&
+     langchainApiKey !== undefined &&
+@@ -193,8 +209,10 @@ export function AddAgentInboxDialog({
+           <DialogHeader>
+             <DialogTitle>Welcome to the Agent Inbox!</DialogTitle>
+             <DialogDescription>
+-              <p>To get started, please add an inbox below.</p>
+-              <p>
++              <span className="block">
++                To get started, please add an inbox below.
++              </span>
++              <span className="block">
+                 Not sure where to start? Check out our docs
+                 <a
+                   href={AGENT_INBOX_GITHUB_README_URL}
+@@ -205,7 +223,7 @@ export function AddAgentInboxDialog({
+                   here
+                 </a>
+                 .
+-              </p>
++              </span>
+             </DialogDescription>
+           </DialogHeader>
+         ) : (
+@@ -245,10 +263,10 @@ export function AddAgentInboxDialog({
+             </p>
+             <Input
+               id="deployment-url"
+-              placeholder="https://my-agent.default.us.langgraph.app"
++              placeholder="http://localhost:2024 or https://my-agent.default.us.langgraph.app"
+               className="col-span-3"
+               required
+-              value={deploymentUrl}
++              value={rawDeploymentUrl}
+               onChange={(e) => setDeploymentUrl(e.target.value)}
+             />
+           </div>
+diff --git a/src/components/agent-inbox/components/edit-agent-inbox-dialog.tsx b/src/components/agent-inbox/components/edit-agent-inbox-dialog.tsx
+index 023c0c0..2a8203a 100644
+--- a/src/components/agent-inbox/components/edit-agent-inbox-dialog.tsx
++++ b/src/components/agent-inbox/components/edit-agent-inbox-dialog.tsx
+@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
+ import { AgentInbox } from "../types";
+ import { useInboxes } from "../hooks/use-inboxes";
+ import { logger } from "../utils/logger";
++import { normalizeDeploymentUrl } from "../utils";
+ 
+ export function EditAgentInboxDialog({
+   agentInbox,
+@@ -44,7 +45,7 @@ export function EditAgentInboxDialog({
+       updateAgentInbox({
+         ...agentInbox,
+         graphId,
+-        deploymentUrl,
++        deploymentUrl: normalizeDeploymentUrl(deploymentUrl),
+         name,
+       });
+ 
+diff --git a/src/components/agent-inbox/contexts/ThreadContext.tsx b/src/components/agent-inbox/contexts/ThreadContext.tsx
+index 274e783..3742d72 100644
+--- a/src/components/agent-inbox/contexts/ThreadContext.tsx
++++ b/src/components/agent-inbox/contexts/ThreadContext.tsx
+@@ -25,6 +25,7 @@ import {
+   processInterruptedThread,
+   processThreadWithoutInterrupts,
+ } from "./utils";
++import { normalizeDeploymentUrl } from "../utils";
+ import { useLocalStorage } from "../hooks/use-local-storage";
+ import { useInboxes } from "../hooks/use-inboxes";
+ import { logger } from "../utils/logger";
+@@ -81,7 +82,12 @@ const getClient = ({ agentInboxes, getItem, toast }: GetClientArgs) => {
+     });
+     return;
+   }
+-  const deploymentUrl = agentInboxes.find((i) => i.selected)?.deploymentUrl;
++  const storedDeploymentUrl = agentInboxes.find(
++    (i) => i.selected
++  )?.deploymentUrl;
++  const deploymentUrl = storedDeploymentUrl
++    ? normalizeDeploymentUrl(storedDeploymentUrl)
++    : undefined;
+   if (!deploymentUrl) {
+     toast({
+       title: "Error",
+diff --git a/src/components/agent-inbox/utils.ts b/src/components/agent-inbox/utils.ts
+index afc4cb7..eefc182 100644
+--- a/src/components/agent-inbox/utils.ts
++++ b/src/components/agent-inbox/utils.ts
+@@ -14,6 +14,18 @@ export function prettifyText(action: string) {
+   return startCase(action.replace(/_/g, " "));
+ }
+ 
++/**
++ * Trims whitespace and trailing slashes, and defaults to http:// when no scheme is given
++ * (e.g. "localhost:2024" -> "http://localhost:2024"). Returns "" for empty input.
++ */
++export function normalizeDeploymentUrl(url: string): string {
++  const trimmed = url.trim().replace(/\/+$/, "");
++  if (!trimmed) {
++    return "";
++  }
++  return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
++}
++
+ /**
+  * Determines if a URL is a deployed (cloud) URL.
+  */

@@ -193,7 +193,7 @@ On first run (or whenever the saved session expires), a browser window opens to 
 
 Undecided invitations and reply-worthy messages can be reviewed by a human in [Agent Inbox](https://github.com/langchain-ai/agent-inbox), included as a git submodule in `agent-inbox/`. `review_graph.py` defines two LangGraph graphs that pause with an `interrupt`: `invitation_review` (**Accept** / **Ignore**) and `message_review` (**Accept** the suggested reply, **Edit** it, or **Ignore**).
 
-1. Fetch the UI and install it (requires Node.js and yarn): `git submodule update --init && (cd agent-inbox && yarn install)`
+1. Fetch the UI and install it (requires Node.js and yarn): `git submodule update --init && git -C agent-inbox apply ../patches/agent-inbox-fixes.patch && (cd agent-inbox && yarn install)`. The patch fixes nested `<p>` hydration errors and makes a scheme-less Deployment URL (e.g. `localhost:2024`) default to `http://` instead of throwing "Invalid URL". Skip the apply if already applied.
 2. Start the LangGraph server: `uv run langgraph dev --no-browser` (serves `http://localhost:2024`)
 3. Start the UI: `cd agent-inbox && yarn dev` and open <http://localhost:3000>. In **Settings**, enter your LangSmith API key, then **Add Inbox** with Deployment URL `http://localhost:2024` and Assistant/Graph ID `invitation_review`. Add a second inbox with Graph ID `message_review` for messages.
 4. Queue undecided invitations: `uv run python invitations_manager.py --send-to-inbox`
