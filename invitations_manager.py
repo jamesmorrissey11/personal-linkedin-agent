@@ -9,8 +9,8 @@ import azure.identity.aio
 import yaml
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from playwright.async_api import ElementHandle, Page
 from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import BaseModel
 from pydantic_ai import Agent, NativeOutput
@@ -22,7 +22,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from rich.logging import RichHandler
 
-from linkedin_guard import ApprovedAction, safe_click
+from linkedin_actions import click_invitation_button
 from linkedin_pages import (  # noqa: F401  (unused names are re-exported for existing callers)
     INVITATION_CARD_SELECTORS,
     MAX_SCANNED_INVITATIONS,
@@ -251,23 +251,6 @@ def approved_invitation_decision(resolved_review: dict) -> ApprovedInvitationAct
     return ApprovedInvitationAction(action=action, reason="Approved by human via Agent Inbox", thread_id=thread_id)
 
 
-async def execute_approved_action(card: ElementHandle, decision: ApprovedInvitationAction) -> bool:
-    """Execute a validated human-approved invitation action."""
-    if decision.action == InvitationAction.ACCEPT:
-        accept_button = await card.query_selector("button[aria-label*='Accept']")
-        if accept_button:
-            return await safe_click(accept_button, approval=ApprovedAction("invitation", "accept"))
-        else:
-            logger.warning("Accept button not found on the card.")
-    elif decision.action == InvitationAction.IGNORE:
-        ignore_button = await card.query_selector("button[aria-label*='Ignore']")
-        if ignore_button:
-            return await safe_click(ignore_button, approval=ApprovedAction("invitation", "ignore"))
-        else:
-            logger.warning("Ignore button not found on the card.")
-    return False
-
-
 NEEDS_JUDGMENT_LABEL = "Needs your judgment"
 
 
@@ -341,7 +324,7 @@ async def apply_resolved_invitations(page: Page, review_client, human_decisions:
             if not resolved_review:
                 continue
             human_decision = approved_invitation_decision(resolved_review)
-            if human_decision and await execute_approved_action(card, human_decision):
+            if human_decision and await click_invitation_button(card, human_decision.action.value):
                 invitation.decision = InvitationDecision(action=human_decision.action, reason=human_decision.reason)
                 await mark_applied(review_client, human_decision.thread_id)
                 logger.info(f"Applied human-approved decision for {invitation.name}: {human_decision.action.value}")

@@ -1,7 +1,6 @@
-import asyncio
-
 import scripts.capture_linkedin_fixtures as capture
 from scripts.capture_linkedin_fixtures import sanitize_html
+from tests.async_helpers import run_async_test
 
 
 def test_sanitize_html_replaces_private_text_and_linkedin_urns():
@@ -34,7 +33,7 @@ def test_open_conversation_menu_uses_visible_selector_match(monkeypatch):
 
     monkeypatch.setattr(capture, "safe_click", fake_safe_click)
 
-    selector = asyncio.run(capture._open_conversation_menu(page))
+    selector = run_async_test(lambda: capture._open_conversation_menu(page))
 
     assert selector == capture.CONVERSATION_MENU_SELECTORS[0]
     assert clicked == [visible]
@@ -49,7 +48,7 @@ def test_fixture_markup_contains_only_active_thread_and_archive_indicator():
         },
     )
 
-    markup = asyncio.run(capture._fixture_markup(page, include_archived_indicator=True))
+    markup = run_async_test(lambda: capture._fixture_markup(page, include_archived_indicator=True))
 
     assert "active thread" in markup
     assert "Archived" in markup

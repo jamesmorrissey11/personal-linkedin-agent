@@ -131,7 +131,7 @@ def test_only_valid_resolved_invitation_review_can_execute():
     approved = invitations_manager.approved_invitation_decision({"thread_id": "thread", "values": {"decision": "ignore"}})
     assert approved is not None
     card = FakeInvitationCard()
-    applied = run_async_test(lambda: invitations_manager.execute_approved_action(cast(ElementHandle, card), approved))
+    applied = run_async_test(lambda: invitations_manager.click_invitation_button(cast(ElementHandle, card), approved.action.value))
 
     assert applied is True
     assert card.accept.clicks == 0

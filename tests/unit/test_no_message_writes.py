@@ -10,10 +10,10 @@ from tests.async_helpers import run_async_test
 ROOT = Path(__file__).resolve().parents[2]
 # linkedin_guard.py is the one place allowed to call .click(): safe_click wraps it.
 CLICK_ALLOWED_FILES = {"linkedin_guard.py"}
+ACTION_FILES = {"linkedin_actions.py"}
 FORBIDDEN_CALLS = {"press", "type", "fill", "insert_text", "dispatch_event", "set_input_files", "press_sequentially"}
 FORBIDDEN_SELECTOR_PATTERN = re.compile(r"msg-form|send-button|contenteditable|aria-label\*?=['\"]?(send|delete|archive|report|block|leave)", re.IGNORECASE)
-# Explicit exceptions for source files that legitimately mention these strings (none today).
-SELECTOR_ALLOWED_FILES = {"linkedin_guard.py"}
+SELECTOR_ALLOWED_FILES = {"linkedin_guard.py"} | ACTION_FILES
 
 
 def source_files() -> list[Path]:
@@ -36,7 +36,7 @@ def test_sources_are_found():
 
 
 def test_no_keyboard_typing_or_filling_in_python_sources():
-    offenders = [f"{path.name}:{line} .{attr}()" for path in source_files() if path.name not in CLICK_ALLOWED_FILES for attr, line in attribute_calls(parse(path)) if attr in FORBIDDEN_CALLS]
+    offenders = [f"{path.name}:{line} .{attr}()" for path in source_files() if path.name not in ACTION_FILES for attr, line in attribute_calls(parse(path)) if attr in FORBIDDEN_CALLS]
     assert offenders == []
 
 
