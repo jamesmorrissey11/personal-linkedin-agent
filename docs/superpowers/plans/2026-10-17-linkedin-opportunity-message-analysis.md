@@ -92,9 +92,7 @@ Expected: PASS.
 
 ```bash
 git add .gitignore src/linkedin_agent/analysis tests/unit/test_message_analysis_storage.py
-git commit -m "feat(analysis): add private message analysis storage
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+git commit -m "feat(analysis): add private message analysis storage"
 ```
 
 ### Task 2: Focused and Archived Incremental Collector
@@ -152,9 +150,7 @@ Expected: PASS.
 
 ```bash
 git add src/linkedin_agent/analysis/scraper.py tests/playwright
-git commit -m "feat(analysis): collect focused and archived messages incrementally
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+git commit -m "feat(analysis): collect focused and archived messages incrementally"
 ```
 
 ### Task 3: Opportunity Segmentation and Relevance
@@ -215,9 +211,7 @@ Expected: All committed synthetic cases pass against the configured evaluation m
 
 ```bash
 git add src/linkedin_agent/analysis/agents.py evals/analysis_run.py evals/message_analysis_cases.yaml tests/unit/test_message_analysis_opportunities.py
-git commit -m "feat(analysis): identify relevant recruiting opportunities
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+git commit -m "feat(analysis): identify relevant recruiting opportunities"
 ```
 
 ### Task 4: Grounded Extraction, Verification, and Normalization
@@ -283,9 +277,7 @@ Expected: Grounding and normalization evaluation cases pass when model credentia
 
 ```bash
 git add src/linkedin_agent/analysis/agents.py src/linkedin_agent/analysis/pipeline.py evals/analysis_run.py evals/message_analysis_cases.yaml tests/unit/test_message_analysis_extraction.py
-git commit -m "feat(analysis): extract and verify opportunity requirements
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+git commit -m "feat(analysis): extract and verify opportunity requirements"
 ```
 
 ### Task 5: Hybrid Taxonomy and Deterministic Aggregation
@@ -333,9 +325,7 @@ Expected: PASS.
 
 ```bash
 git add src/linkedin_agent/analysis/agents.py src/linkedin_agent/analysis/pipeline.py tests/unit/test_message_analysis_taxonomy.py
-git commit -m "feat(analysis): group and aggregate opportunity requirements
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+git commit -m "feat(analysis): group and aggregate opportunity requirements"
 ```
 
 ### Task 6: Evidence-Backed Markdown Reports
@@ -381,9 +371,7 @@ Expected: PASS.
 
 ```bash
 git add src/linkedin_agent/analysis/report.py tests/unit/test_message_analysis_report.py
-git commit -m "feat(analysis): generate evidence-backed reports
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+git commit -m "feat(analysis): generate evidence-backed reports"
 ```
 
 ### Task 7: CLI Orchestration, Failure Semantics, and Documentation
@@ -454,8 +442,6 @@ Expected: All committed synthetic cases pass when configured model credentials a
 
 ```bash
 git add src/linkedin_agent/analysis/command.py src/linkedin_agent/cli.py tests/unit/test_message_analyzer_cli.py README.md
-git commit -m "feat(analysis): add linkedin opportunity analysis cli
-
-Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+git commit -m "feat(analysis): add linkedin opportunity analysis cli"
 ```
 
